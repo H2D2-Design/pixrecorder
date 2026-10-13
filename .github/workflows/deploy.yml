@@ -12,6 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set deployment directory
+        id: deploydir
+        run: |
+          if [ "${GITHUB_REF##*/}" = "main" ]; then
+            echo "DIR=/htdocs/www.h2d2.de/pixrecorder/" >> $GITHUB_ENV
+          else
+            echo "DIR=/htdocs/www.h2d2.de/pixrecorder-dev/" >> $GITHUB_ENV
+          fi
+
       - name: Upload Website
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
@@ -19,4 +28,4 @@ jobs:
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           local-dir: ./
-          server-dir: /htdocs/www.h2d2.de/pixrecorder/
+          server-dir: ${{ env.DIR }}
