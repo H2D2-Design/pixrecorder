@@ -19,4 +19,4 @@ jobs:
           username: ${{ secrets.FTP_hst1100 }}
           password: ${{ secrets.FTP_6QuasjevAMyuftAr }}
           local-dir: ./
-          server-dir: /www.h2d2.de/pixrecorder
+          server-dir: /pixrecorder
