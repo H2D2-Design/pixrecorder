@@ -15,8 +15,8 @@ jobs:
       - name: Upload Website
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
-          server: ${{ secrets.FTP_host03.loswebos.de }}
-          username: ${{ secrets.FTP_hst1100 }}
-          password: ${{ secrets.FTP_6QuasjevAMyuftAr }}
+          server: ${{ FTP_host03.loswebos.de }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
           local-dir: ./
-          server-dir: /pixrecorder
+          server-dir: www/htdocs/pixrecorder/
