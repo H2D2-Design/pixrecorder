@@ -15,7 +15,7 @@ jobs:
       - name: Upload Website
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
-          server: ${{ host03.loswebos.de }}
+          server: host03.loswebos.de
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           local-dir: ./
