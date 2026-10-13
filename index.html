@@ -355,6 +355,239 @@
     width: 0; height: 0;
   }
 
+  /* ────────────────────────────────────────────────────────────────────
+     Swipeable pages — the middle section of the control panel hosts three
+     screens the user can snap between: default audio controls, frequency
+     range (placeholder for now), and background colour.
+     ──────────────────────────────────────────────────────────────────── */
+  .pages-container {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .pages-scroll {
+    width: 100%;
+    height: 130px;                       /* kept constant so panel height never jumps */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    display: flex;
+    scrollbar-width: none;               /* Firefox */
+    -ms-overflow-style: none;            /* legacy Edge */
+    overscroll-behavior-x: contain;
+  }
+  .pages-scroll::-webkit-scrollbar { display: none; }
+  .page {
+    flex: 0 0 100%;
+    min-width: 100%;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .page-placeholder {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    color: var(--pr-grey-middle);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 24px;
+  }
+  .page-placeholder-hint {
+    font-size: 12px;
+    opacity: 0.5;
+  }
+
+  /* Pagination dots below the swipeable area */
+  .pages-dots {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    height: 8px;
+  }
+  .pages-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--pr-grey-main);
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.15s;
+  }
+  .pages-dot:hover { background: var(--pr-grey-middle); }
+  .pages-dot.active {
+    background: var(--pr-grey-middle);
+    transform: scale(1.3);
+  }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Background colour picker (HSV)
+     - sv-area: 2D sat/value pad; background is a hue-tinted gradient
+       layered under a top-to-bottom black fade. Click/drag anywhere.
+     - hue-area: 1D rainbow slider. Click/drag to pick a hue.
+     Both get touch-action: none so touch interactions don't scroll the
+     surrounding pages container by accident.
+     ──────────────────────────────────────────────────────────────────── */
+  .bgcolor {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    /* 4 px horizontal padding reserves space for the thumb's outer ring.
+       The thumb is positioned by its centre within the picker area; when the
+       user picks a colour at the extreme edge the ring extends 4 px past
+       the picker. Without this breathing room the ring would be clipped by
+       the parent .page { overflow: hidden } that keeps swipeable pages
+       isolated from each other. */
+    padding: 0 4px;
+    box-sizing: border-box;
+  }
+  .bgcolor-label {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 24px;
+    color: var(--pr-grey-middle);
+  }
+  .bgcolor-sv-area {
+    width: 100%;
+    height: 60px;
+    position: relative;
+    cursor: crosshair;
+    touch-action: none;
+    border-radius: 4px;
+    background:
+      linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0)),
+      linear-gradient(to right, rgba(255,255,255,1), hsl(0, 100%, 50%));
+  }
+  .bgcolor-sv-thumb,
+  .bgcolor-hue-thumb {
+    position: absolute;
+    /* 16 px outer, 4 px white ring, 8 px transparent inner — matches Figma
+       spec. The inner window shows the actual picked colour (because the
+       picker area beneath is the gradient itself). */
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    border: 4px solid white;
+    box-sizing: border-box;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  .bgcolor-hue-area {
+    width: 100%;
+    max-width: 256px;
+    height: 12px;
+    position: relative;
+    cursor: pointer;
+    touch-action: none;
+    border-radius: 6px;
+    background: linear-gradient(to right,
+      hsl(0, 100%, 50%),
+      hsl(60, 100%, 50%),
+      hsl(120, 100%, 50%),
+      hsl(180, 100%, 50%),
+      hsl(240, 100%, 50%),
+      hsl(300, 100%, 50%),
+      hsl(360, 100%, 50%)
+    );
+  }
+  .bgcolor-hue-thumb {
+    top: 50%;
+  }
+
+  /* ────────────────────────────────────────────────────────────────────
+     Frequency range panel — real-time spectrum visualization with two
+     draggable triangle handles that set the low/high boundary of all
+     six channel bands. The handles overhang 8 px on each side of the
+     visualization area so .freqrange gets horizontal padding, same
+     technique as the colour picker, to keep the triangles visible at
+     extreme positions without being clipped by .page { overflow: hidden }.
+     ──────────────────────────────────────────────────────────────────── */
+  .freqrange {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 0 8px;
+    box-sizing: border-box;
+  }
+  .freqrange-area {
+    width: 100%;
+    height: 82px;
+    background: var(--pr-grey-main);
+    border-radius: 4px;
+    position: relative;
+    overflow: visible;
+  }
+  .freqrange-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
+    border-radius: 4px;
+  }
+  .freqrange-handle {
+    position: absolute;
+    bottom: -2px;
+    width: 16px;
+    height: 12px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: ew-resize;
+    touch-action: none;
+    transform: translateX(-50%);
+    color: var(--pr-grey-middle);
+    transition: color 0.1s;
+  }
+  .freqrange-handle svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+  }
+  .freqrange-handle:hover,
+  .freqrange-handle.dragging { color: white; }
+  .freqrange-indicator {
+    position: absolute;
+    top: 0;
+    width: 1px;
+    background: white;
+    height: 100%;
+    display: none;
+    pointer-events: none;
+    transform: translateX(-50%);
+  }
+  .freqrange-indicator.active { display: block; }
+  .freqrange-indicator-label {
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: white;
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1;
+    white-space: nowrap;
+    padding: 2px 6px;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 3px;
+  }
+  .freqrange-label {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 24px;
+    color: var(--pr-grey-middle);
+  }
+
   /* Divider lines */
   .frame-divider {
     height: 2px;
@@ -632,6 +865,11 @@
       flex-wrap: wrap;
       row-gap: 8px;
     }
+    /* The swipeable pages container grows to accommodate the taller slider
+       page (two wrapped rows). Other pages are shorter but centred vertically. */
+    .pages-scroll {
+      height: 268px;
+    }
     .vslider,
     .eq-channel {
       flex: 0 0 calc(100% / 3);
@@ -772,42 +1010,82 @@
     </div>
 
     <!-- Vertical sliders -->
-    <div class="vslider-row">
-      <div class="vslider">
-        <span class="vslider-value" id="sensValue">50</span>
-        <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
-        <span class="vslider-label">Gain</span>
-        <input type="range" id="sensSlider" min="10" max="100" value="50" step="1">
+    <!-- Three swipeable pages: audio sliders, frequency range (placeholder), background colour -->
+    <div class="pages-container">
+      <div class="pages-scroll" id="pagesScroll">
+        <div class="page" data-page="default">
+          <div class="vslider-row">
+          <div class="vslider">
+            <span class="vslider-value" id="sensValue">50</span>
+            <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
+            <span class="vslider-label">Gain</span>
+            <input type="range" id="sensSlider" min="10" max="100" value="50" step="1">
+          </div>
+          <div class="vslider">
+            <span class="vslider-value" id="scaleValue">50</span>
+            <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
+            <span class="vslider-label">Scale</span>
+            <input type="range" id="scaleSlider" min="1" max="100" value="50" step="1">
+          </div>
+          <div class="vslider">
+            <span class="vslider-value" id="xValue">100</span>
+            <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
+            <span class="vslider-label">X</span>
+            <input type="range" id="xSlider" min="0" max="100" value="100" step="1">
+          </div>
+          <div class="vslider">
+            <span class="vslider-value" id="yValue">50</span>
+            <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
+            <span class="vslider-label">Y</span>
+            <input type="range" id="ySlider" min="0" max="100" value="50" step="1">
+          </div>
+          <div class="vslider">
+            <span class="vslider-value" id="sineValue">0</span>
+            <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
+            <span class="vslider-label">Sinus</span>
+            <input type="range" id="sineSlider" min="0" max="100" value="0" step="1">
+          </div>
+          <div class="vslider">
+            <span class="vslider-value" id="rotValue">0</span>
+            <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
+            <span class="vslider-label">Rotate</span>
+            <input type="range" id="rotSlider" min="0" max="100" value="0" step="1">
+          </div>
+          </div>
+        </div>
+        <div class="page" data-page="frequency">
+          <div class="freqrange">
+            <div class="freqrange-area" id="freqrangeArea">
+              <canvas class="freqrange-canvas" id="freqrangeCanvas"></canvas>
+              <div class="freqrange-indicator" id="freqrangeIndicator">
+                <span class="freqrange-indicator-label" id="freqrangeIndicatorLabel">—</span>
+              </div>
+              <button class="freqrange-handle freqrange-handle--low" id="freqrangeHandleLow" type="button" title="Low frequency boundary" aria-label="Low frequency boundary">
+                <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><polygon points="8,0 16,12 0,12"/></svg>
+              </button>
+              <button class="freqrange-handle freqrange-handle--high" id="freqrangeHandleHigh" type="button" title="High frequency boundary" aria-label="High frequency boundary">
+                <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><polygon points="8,0 16,12 0,12"/></svg>
+              </button>
+            </div>
+            <span class="freqrange-label">Frequency range</span>
+          </div>
+        </div>
+        <div class="page" data-page="bgcolor">
+          <div class="bgcolor">
+            <span class="bgcolor-label">Background color</span>
+            <div class="bgcolor-sv-area" id="bgcolorSvArea">
+              <div class="bgcolor-sv-thumb" id="bgcolorSvThumb"></div>
+            </div>
+            <div class="bgcolor-hue-area" id="bgcolorHueArea">
+              <div class="bgcolor-hue-thumb" id="bgcolorHueThumb"></div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="vslider">
-        <span class="vslider-value" id="scaleValue">50</span>
-        <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
-        <span class="vslider-label">Scale</span>
-        <input type="range" id="scaleSlider" min="1" max="100" value="50" step="1">
-      </div>
-      <div class="vslider">
-        <span class="vslider-value" id="xValue">100</span>
-        <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
-        <span class="vslider-label">X</span>
-        <input type="range" id="xSlider" min="0" max="100" value="100" step="1">
-      </div>
-      <div class="vslider">
-        <span class="vslider-value" id="yValue">50</span>
-        <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
-        <span class="vslider-label">Y</span>
-        <input type="range" id="ySlider" min="0" max="100" value="50" step="1">
-      </div>
-      <div class="vslider">
-        <span class="vslider-value" id="sineValue">0</span>
-        <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
-        <span class="vslider-label">Sinus</span>
-        <input type="range" id="sineSlider" min="0" max="100" value="0" step="1">
-      </div>
-      <div class="vslider">
-        <span class="vslider-value" id="rotValue">0</span>
-        <div class="vslider-track-wrap"><div class="vslider-track"></div><div class="vslider-thumb"></div></div>
-        <span class="vslider-label">Rotate</span>
-        <input type="range" id="rotSlider" min="0" max="100" value="0" step="1">
+      <div class="pages-dots" id="pagesDots">
+        <button class="pages-dot active" type="button" data-page-index="0" aria-label="Default controls" title="Default controls"></button>
+        <button class="pages-dot" type="button" data-page-index="1" aria-label="Frequency range" title="Frequency range"></button>
+        <button class="pages-dot" type="button" data-page-index="2" aria-label="Background color" title="Background color"></button>
       </div>
     </div>
 
@@ -1286,6 +1564,8 @@ function animate(now) {
 
   // Trails: collected per-channel during the loop, rendered in two passes after.
   const trailDraws = trailsMode !== null ? [] : null;
+
+  drawFreqSpectrum();
 
   freqBands.forEach(([lo, hi], i) => {
     if (!channelEnabled[i]) return;   // disabled channels skip all animation
@@ -2179,6 +2459,325 @@ btn.addEventListener('click', async () => {
     btn.title = label + '\n\nDetails: ' + (e.message || e.name);
   }
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// Frequency range panel — a log-frequency spectrum with two draggable
+// triangle handles that set the overall low/high boundaries. All six
+// channel bands are redistributed logarithmically between those bounds,
+// preserving the original relative spacing from the Techno/909 preset.
+// ──────────────────────────────────────────────────────────────────────
+const FREQ_MIN = 20;
+const FREQ_MAX = 20000;
+const DEFAULT_FREQ_LOW  = 40;
+const DEFAULT_FREQ_HIGH = 18000;
+const MIN_RANGE_RATIO   = 10;     // minimum high/low ratio = 1 decade
+const DEFAULT_FREQ_BOUNDARIES = [40, 120, 350, 1200, 3500, 8000, 18000];
+
+let freqRangeLow  = DEFAULT_FREQ_LOW;
+let freqRangeHigh = DEFAULT_FREQ_HIGH;
+
+function freqToXFraction(freq) {
+  const logMin = Math.log10(FREQ_MIN);
+  const logMax = Math.log10(FREQ_MAX);
+  return (Math.log10(freq) - logMin) / (logMax - logMin);
+}
+function xFractionToFreq(frac) {
+  const logMin = Math.log10(FREQ_MIN);
+  const logMax = Math.log10(FREQ_MAX);
+  return Math.pow(10, logMin + frac * (logMax - logMin));
+}
+function formatFreq(hz) {
+  if (hz >= 10000) return Math.round(hz / 1000) + ' kHz';
+  if (hz >= 1000)  return (hz / 1000).toFixed(1) + ' kHz';
+  return Math.round(hz) + ' Hz';
+}
+
+// Log-interpolate the 7 default boundary points between the new low/high.
+// With default low/high the boundaries map back to the original presets
+// exactly, so the Techno/909 tuning is preserved out of the box.
+function recalculateFreqBands() {
+  const defaultLogRange = Math.log10(DEFAULT_FREQ_HIGH / DEFAULT_FREQ_LOW);
+  const newLogLow  = Math.log10(freqRangeLow);
+  const newLogHigh = Math.log10(freqRangeHigh);
+  const newLogRange = newLogHigh - newLogLow;
+  const boundaries = DEFAULT_FREQ_BOUNDARIES.map(f => {
+    const normalized = Math.log10(f / DEFAULT_FREQ_LOW) / defaultLogRange;
+    return Math.pow(10, newLogLow + normalized * newLogRange);
+  });
+  for (let i = 0; i < 6; i++) {
+    freqBands[i][0] = boundaries[i];
+    freqBands[i][1] = boundaries[i + 1];
+  }
+}
+
+const freqrangeArea = document.getElementById('freqrangeArea');
+const freqrangeCanvas = document.getElementById('freqrangeCanvas');
+const freqrangeCtx = freqrangeCanvas ? freqrangeCanvas.getContext('2d') : null;
+const freqrangeHandleLow  = document.getElementById('freqrangeHandleLow');
+const freqrangeHandleHigh = document.getElementById('freqrangeHandleHigh');
+const freqrangeIndicator  = document.getElementById('freqrangeIndicator');
+const freqrangeIndicatorLabel = document.getElementById('freqrangeIndicatorLabel');
+
+function resizeFreqCanvas() {
+  if (!freqrangeArea || !freqrangeCanvas) return;
+  const rect = freqrangeArea.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width));
+  const h = Math.max(1, Math.round(rect.height));
+  if (freqrangeCanvas.width !== w)  freqrangeCanvas.width  = w;
+  if (freqrangeCanvas.height !== h) freqrangeCanvas.height = h;
+}
+
+function updateFreqrangeHandles() {
+  if (!freqrangeArea) return;
+  const w = freqrangeArea.clientWidth;
+  if (w <= 0) return;
+  freqrangeHandleLow.style.left  = (freqToXFraction(freqRangeLow)  * w) + 'px';
+  freqrangeHandleHigh.style.left = (freqToXFraction(freqRangeHigh) * w) + 'px';
+}
+
+// Called from the main animate loop while mic is live
+function drawFreqSpectrum() {
+  if (!freqrangeCtx || !analyser) return;
+  const w = freqrangeCanvas.width;
+  const h = freqrangeCanvas.height;
+  if (w <= 0 || h <= 0) return;
+  const buf = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(buf);
+  const nyquist = analyser.context.sampleRate / 2;
+  const binCount = buf.length;
+
+  freqrangeCtx.clearRect(0, 0, w, h);
+  // Spectrum as a filled polygon along the top edge of a magnitude-mapped curve
+  freqrangeCtx.beginPath();
+  freqrangeCtx.moveTo(0, h);
+  for (let x = 0; x <= w; x++) {
+    const freq = xFractionToFreq(x / w);
+    const binIdx = Math.min(Math.floor(freq / nyquist * binCount), binCount - 1);
+    const magnitude = buf[binIdx] / 255;
+    freqrangeCtx.lineTo(x, h - magnitude * h);
+  }
+  freqrangeCtx.lineTo(w, h);
+  freqrangeCtx.closePath();
+  freqrangeCtx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+  freqrangeCtx.fill();
+
+  // Dim the out-of-range areas so the user sees which part of the spectrum
+  // is actually feeding the six channels right now.
+  const lowX  = Math.round(freqToXFraction(freqRangeLow)  * w);
+  const highX = Math.round(freqToXFraction(freqRangeHigh) * w);
+  freqrangeCtx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  if (lowX > 0)       freqrangeCtx.fillRect(0, 0, lowX, h);
+  if (highX < w)      freqrangeCtx.fillRect(highX, 0, w - highX, h);
+}
+
+// Shared pointer drag plumbing for both handles. Low handle clamps against
+// (high / MIN_RANGE_RATIO); high handle clamps against (low * MIN_RANGE_RATIO).
+function setupFreqrangeHandle(handle, isLow) {
+  if (!handle) return;
+  let activeId = null;
+  function showIndicator(freq) {
+    const rect = freqrangeArea.getBoundingClientRect();
+    const x = freqToXFraction(freq) * rect.width;
+    freqrangeIndicator.style.left = x + 'px';
+    freqrangeIndicator.classList.add('active');
+    freqrangeIndicatorLabel.textContent = formatFreq(freq);
+  }
+  function onMove(e) {
+    if (e.pointerId !== activeId) return;
+    if (e.pointerType === 'mouse' && e.buttons === 0) { onUp(e); return; }
+    const rect = freqrangeArea.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const freq = xFractionToFreq(frac);
+    if (isLow) {
+      freqRangeLow = Math.max(FREQ_MIN, Math.min(freq, freqRangeHigh / MIN_RANGE_RATIO));
+    } else {
+      freqRangeHigh = Math.min(FREQ_MAX, Math.max(freq, freqRangeLow * MIN_RANGE_RATIO));
+    }
+    recalculateFreqBands();
+    updateFreqrangeHandles();
+    showIndicator(isLow ? freqRangeLow : freqRangeHigh);
+  }
+  function onUp(e) {
+    if (e.pointerId !== activeId) return;
+    activeId = null;
+    handle.classList.remove('dragging');
+    freqrangeIndicator.classList.remove('active');
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
+    try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    activeId = e.pointerId;
+    handle.classList.add('dragging');
+    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+    showIndicator(isLow ? freqRangeLow : freqRangeHigh);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    e.preventDefault();
+  });
+}
+setupFreqrangeHandle(freqrangeHandleLow,  true);
+setupFreqrangeHandle(freqrangeHandleHigh, false);
+
+function syncFreqrangeLayout() {
+  resizeFreqCanvas();
+  updateFreqrangeHandles();
+}
+syncFreqrangeLayout();
+requestAnimationFrame(syncFreqrangeLayout);
+window.addEventListener('load', syncFreqrangeLayout);
+window.addEventListener('resize', syncFreqrangeLayout);
+
+// ──────────────────────────────────────────────────────────────────────
+// Swipeable pages — the middle section of the control panel. Native
+// scroll-snap handles the touch gesture; pagination dots mirror and drive
+// the position.
+// ──────────────────────────────────────────────────────────────────────
+const pagesScroll = document.getElementById('pagesScroll');
+const pagesDots = Array.from(document.querySelectorAll('.pages-dot'));
+
+function syncPagesDots() {
+  if (!pagesScroll || pagesScroll.clientWidth === 0) return;
+  const idx = Math.round(pagesScroll.scrollLeft / pagesScroll.clientWidth);
+  pagesDots.forEach((d, i) => d.classList.toggle('active', i === idx));
+}
+if (pagesScroll) {
+  pagesScroll.addEventListener('scroll', syncPagesDots);
+  window.addEventListener('resize', syncPagesDots);
+}
+pagesDots.forEach((dot, i) => {
+  dot.addEventListener('click', () => {
+    if (!pagesScroll) return;
+    pagesScroll.scrollTo({ left: i * pagesScroll.clientWidth, behavior: 'smooth' });
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Background colour picker — HSV model.
+//   • sv-area: X = saturation (0-100%), Y = value (100% at top, 0% bottom).
+//     The area's background is a hue-tinted gradient layered under a
+//     top-to-bottom black fade, so dragging anywhere maps to one HSV point.
+//   • hue-area: 1D rainbow strip, X = hue (0-360°).
+// Both areas use the same window-level pointer handling pattern as the
+// vertical sliders — attach move/up on pointerdown, remove on pointerup —
+// so dragging outside the browser or releasing out of focus still ends
+// the drag cleanly.
+// ──────────────────────────────────────────────────────────────────────
+const bgcolorSvArea  = document.getElementById('bgcolorSvArea');
+const bgcolorSvThumb = document.getElementById('bgcolorSvThumb');
+const bgcolorHueArea = document.getElementById('bgcolorHueArea');
+const bgcolorHueThumb= document.getElementById('bgcolorHueThumb');
+
+let bgHue = 0;    // 0-360
+let bgSat = 0;    // 0-100
+let bgVal = 0;    // 0-100  (starts at pure black — matches the current stage)
+
+function hsvToRgb(h, s, v) {
+  s /= 100; v /= 100;
+  const c = v * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = v - c;
+  let r = 0, g = 0, b = 0;
+  if (h < 60)       { r = c; g = x; b = 0; }
+  else if (h < 120) { r = x; g = c; b = 0; }
+  else if (h < 180) { r = 0; g = c; b = x; }
+  else if (h < 240) { r = 0; g = x; b = c; }
+  else if (h < 300) { r = x; g = 0; b = c; }
+  else              { r = c; g = 0; b = x; }
+  return [
+    Math.round((r + m) * 255),
+    Math.round((g + m) * 255),
+    Math.round((b + m) * 255)
+  ];
+}
+
+function applyBgColor() {
+  if (!bgcolorSvArea) return;
+  // Re-tint the sv-area based on current hue so dragging always makes sense
+  bgcolorSvArea.style.background =
+    'linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0)),' +
+    'linear-gradient(to right, rgba(255,255,255,1), hsl(' + bgHue + ', 100%, 50%))';
+
+  // Position the two thumbs with pixel-based clamping. The thumb has an
+  // 8 px inner transparent window (16 px outer − 2×4 px white ring), so its
+  // centre must stay at least 4 px (the inner radius) from any picker edge.
+  // Otherwise the inner window overflows the picker and would reveal the
+  // dark panel background behind. Data range (0-100 for sat/val, 0-360 for
+  // hue) stays unclamped — only the visual position is held inside.
+  const INNER_R = 4;
+  const svW = bgcolorSvArea.clientWidth;
+  const svH = bgcolorSvArea.clientHeight;
+  if (svW > 0 && svH > 0) {
+    const svX = Math.max(INNER_R, Math.min(svW - INNER_R, (bgSat / 100) * svW));
+    const svY = Math.max(INNER_R, Math.min(svH - INNER_R, ((100 - bgVal) / 100) * svH));
+    bgcolorSvThumb.style.left = svX + 'px';
+    bgcolorSvThumb.style.top  = svY + 'px';
+  }
+  const hueW = bgcolorHueArea.clientWidth;
+  if (hueW > 0) {
+    const hueX = Math.max(INNER_R, Math.min(hueW - INNER_R, (bgHue / 360) * hueW));
+    bgcolorHueThumb.style.left = hueX + 'px';
+  }
+
+  // Push the colour to the stage CSS variable
+  const [r, g, b] = hsvToRgb(bgHue, bgSat, bgVal);
+  document.documentElement.style.setProperty('--pr-stage', 'rgb(' + r + ', ' + g + ', ' + b + ')');
+}
+
+function setupBgColorArea(area, applyFromEvent) {
+  if (!area) return;
+  let activeId = null;
+  function onMove(e) {
+    if (e.pointerId !== activeId) return;
+    if (e.pointerType === 'mouse' && e.buttons === 0) { onUp(e); return; }
+    applyFromEvent(e);
+  }
+  function onUp(e) {
+    if (e.pointerId !== activeId) return;
+    activeId = null;
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
+    try { area.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+  area.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    activeId = e.pointerId;
+    try { area.setPointerCapture(e.pointerId); } catch (_) {}
+    applyFromEvent(e);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    e.preventDefault();
+  });
+}
+
+setupBgColorArea(bgcolorSvArea, (e) => {
+  const rect = bgcolorSvArea.getBoundingClientRect();
+  const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+  const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+  bgSat = (x / rect.width) * 100;
+  bgVal = 100 - (y / rect.height) * 100;
+  applyBgColor();
+});
+setupBgColorArea(bgcolorHueArea, (e) => {
+  const rect = bgcolorHueArea.getBoundingClientRect();
+  const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+  bgHue = (x / rect.width) * 360;
+  applyBgColor();
+});
+
+// First paint — may be called before layout settles (clientWidth = 0),
+// which the pixel clamp inside applyBgColor handles gracefully by skipping
+// positioning. Follow-ups on next frame, on load, and on resize ensure the
+// thumbs land in the right spots once dimensions are known.
+applyBgColor();
+requestAnimationFrame(applyBgColor);
+window.addEventListener('load', applyBgColor);
+window.addEventListener('resize', applyBgColor);
 
 // Set initial opacity
 resetUI();
