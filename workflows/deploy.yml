@@ -1,0 +1,22 @@
+name: Deploy PixRecorder
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload Website
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.host03.loswebos.de }}
+          username: ${{ secrets.hst1100 }}
+          password: ${{ secrets.6QuasjevAMyuftAr }}
+          local-dir: ./
+          server-dir: /www.h2d2.de/pixrecorder
