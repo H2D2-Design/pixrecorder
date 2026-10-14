@@ -549,7 +549,7 @@
     cursor: ew-resize;
     touch-action: none;
     transform: translateX(-50%);
-    color: var(--pr-grey-middle);
+    color: var(--pr-purple);          /* PR_Interaction_Main / #B49EE5 */
     transition: color 0.1s;
   }
   .freqrange-handle::after {
@@ -2564,6 +2564,16 @@ function updateFreqrangeHandles() {
   freqrangeHandleHigh.style.left = (freqToXFraction(freqRangeHigh) * w) + 'px';
 }
 
+// Resolution of the spectrum display (number of log-spaced sample points
+// across the box). Lower = chunkier shape; higher = finer gradient.
+// 32 reads clearly as a shape of the signal without turning into pixel noise.
+const SPECTRUM_BARS = 32;
+// Time smoothing — each frame the stored magnitude is pulled towards the
+// current instant value by (1 − alpha). Higher alpha → calmer / laggier
+// response; lower → snappier. 0.85 gives a steady "cross-section" feel.
+const SPECTRUM_SMOOTHING = 0.85;
+const smoothedSpectrum = new Float32Array(SPECTRUM_BARS);
+
 // Called from the main animate loop while mic is live
 function drawFreqSpectrum() {
   if (!freqrangeCtx || !analyser) return;
@@ -2575,16 +2585,34 @@ function drawFreqSpectrum() {
   const nyquist = analyser.context.sampleRate / 2;
   const binCount = buf.length;
 
+  // For each of SPECTRUM_BARS log-frequency slices, average all the FFT bins
+  // that fall within it, then exponentially smooth against the stored value
+  // so the shape evolves gently instead of flickering with every frame.
+  for (let i = 0; i < SPECTRUM_BARS; i++) {
+    const fLo = xFractionToFreq(i / SPECTRUM_BARS);
+    const fHi = xFractionToFreq((i + 1) / SPECTRUM_BARS);
+    const binLo = Math.max(0, Math.floor(fLo / nyquist * binCount));
+    const binHi = Math.min(binCount - 1, Math.ceil(fHi / nyquist * binCount));
+    let sum = 0;
+    let count = 0;
+    for (let b = binLo; b <= binHi; b++) { sum += buf[b]; count++; }
+    const current = count > 0 ? (sum / count) / 255 : 0;
+    smoothedSpectrum[i] = smoothedSpectrum[i] * SPECTRUM_SMOOTHING
+                        + current * (1 - SPECTRUM_SMOOTHING);
+  }
+
   freqrangeCtx.clearRect(0, 0, w, h);
-  // Spectrum as a filled polygon along the top edge of a magnitude-mapped curve
+  // Spectrum as a filled polygon through the 32 smoothed sample points.
+  // Each point sits at the centre of its log-frequency slice.
   freqrangeCtx.beginPath();
   freqrangeCtx.moveTo(0, h);
-  for (let x = 0; x <= w; x++) {
-    const freq = xFractionToFreq(x / w);
-    const binIdx = Math.min(Math.floor(freq / nyquist * binCount), binCount - 1);
-    const magnitude = buf[binIdx] / 255;
-    freqrangeCtx.lineTo(x, h - magnitude * h);
+  freqrangeCtx.lineTo(0, h - smoothedSpectrum[0] * h);
+  for (let i = 0; i < SPECTRUM_BARS; i++) {
+    const x = ((i + 0.5) / SPECTRUM_BARS) * w;
+    const y = h - smoothedSpectrum[i] * h;
+    freqrangeCtx.lineTo(x, y);
   }
+  freqrangeCtx.lineTo(w, h - smoothedSpectrum[SPECTRUM_BARS - 1] * h);
   freqrangeCtx.lineTo(w, h);
   freqrangeCtx.closePath();
   freqrangeCtx.fillStyle = 'rgba(255, 255, 255, 0.35)';
@@ -2621,7 +2649,12 @@ function drawFreqSpectrum() {
 function setFreqrangeMicActive(active) {
   if (!freqrangeArea) return;
   freqrangeArea.classList.toggle('no-signal', !active);
-  if (active) resizeFreqCanvas();
+  if (active) {
+    // Fresh session — clear the time-smoothed buffer so the first frame
+    // starts from zero instead of showing a stale shape from last time.
+    smoothedSpectrum.fill(0);
+    resizeFreqCanvas();
+  }
 }
 
 // Shared pointer drag plumbing for both handles. Low handle clamps against
