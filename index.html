@@ -1585,8 +1585,12 @@ function animate(now) {
   animId = requestAnimationFrame(animate);
   const dt = lastFrameTime ? Math.min((now - lastFrameTime) / 1000, 0.1) : 0.016;
   lastFrameTime = now;
-  const buf = new Uint8Array(analyser.frequencyBinCount);
-  analyser.getByteFrequencyData(buf);
+  // Read the FFT and apply the perceptual boost curve exactly once per frame.
+  // Everything downstream — spectrum display, channel averages, trails — reads
+  // from `compensatedSpectrum`, so Gain/Scale/Rotate operate on an already
+  // tilt-compensated signal and the panel-2 visualisation shows the shape
+  // the icons actually respond to.
+  captureCompensatedSpectrum();
   const sr = analyser.context.sampleRate;
   const fft = analyser.fftSize;
 
@@ -1598,16 +1602,13 @@ function animate(now) {
   freqBands.forEach(([lo, hi], i) => {
     if (!channelEnabled[i]) return;   // disabled channels skip all animation
     const idxLo = freqToIndex(lo, sr, fft);
-    const idxHi = Math.min(freqToIndex(hi, sr, fft), buf.length - 1);
+    const idxHi = Math.min(freqToIndex(hi, sr, fft), compensatedSpectrum.length - 1);
     let sum = 0;
     const count = idxHi - idxLo + 1;
-    for (let j = idxLo; j <= idxHi; j++) sum += buf[j] || 0;
-    // Per-channel pre-gain to compensate for the natural roll-off of high frequencies
-    // in most music. Kick (i=0) keeps its level; Air (i=5) is boosted up to 4×.
-    // Linear interpolation between → all 6 visual channels stay responsive.
-    const PRE_GAIN_MAX = 4;
-    const preGain = 1 + (PRE_GAIN_MAX - 1) * (i / 5);
-    const avg = (sum / count) * preGain;
+    for (let j = idxLo; j <= idxHi; j++) sum += compensatedSpectrum[j] || 0;
+    // The per-bin boost curve is baked into compensatedSpectrum already —
+    // no per-channel preGain multiplier needed on top.
+    const avg = sum / count;
     // s: 0 (still) → 1 (max)
     const s = Math.min(1, avg / 200);
 
@@ -2466,6 +2467,7 @@ btn.addEventListener('click', async () => {
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.8;
     src.connect(analyser);
+    buildBoostCurve();   // one-off init — depends on sample rate + FFT size
     running = true;
     setMicState('Stop microphone', true);
     btn.title = '';
@@ -2501,8 +2503,53 @@ const FREQ_MAX = 20000;
 const DEFAULT_FREQ_LOW  = 40;
 const DEFAULT_FREQ_HIGH = 18000;
 const MIN_RANGE_RATIO   = 10;     // minimum high/low ratio = 1 decade
-const DEFAULT_FREQ_BOUNDARIES = [40, 120, 350, 1200, 3500, 8000, 18000];
 
+// Perceptual boost curve — compensates for the natural low-frequency
+// dominance of most music by scaling the raw FFT bins by a factor that
+// rises linearly from 1× at FREQ_MIN to SPECTRUM_BOOST_MAX at FREQ_MAX
+// (linear in log-frequency, matching how we lay out the spectrum display
+// and the six channel bands). The result is the mathematical starting
+// point for every downstream calculation this frame — both the panel-2
+// spectrum visualisation and the per-channel averages that drive the
+// icon animation read it. The user's Gain, Scale, Rotate etc. sliders
+// then modulate this already-compensated signal.
+const SPECTRUM_BOOST_MAX = 4;
+let boostCurve = null;              // Float32Array per FFT bin
+let rawFreqBuf = null;              // reusable Uint8Array, FFT bin count
+let compensatedSpectrum = null;     // Float32Array, 0-255 range, clipped
+
+function buildBoostCurve() {
+  if (!analyser) return;
+  const binCount = analyser.frequencyBinCount;
+  const nyquist = analyser.context.sampleRate / 2;
+  const logMin = Math.log10(FREQ_MIN);
+  const logMax = Math.log10(FREQ_MAX);
+  const logRange = logMax - logMin;
+  rawFreqBuf = new Uint8Array(binCount);
+  compensatedSpectrum = new Float32Array(binCount);
+  boostCurve = new Float32Array(binCount);
+  for (let i = 0; i < binCount; i++) {
+    // bin i covers [i * binWidth, (i+1) * binWidth]; use centre frequency
+    const freq = (i + 0.5) / binCount * nyquist;
+    const safe = Math.max(freq, FREQ_MIN);
+    const logPos = Math.max(0, Math.min(1, (Math.log10(safe) - logMin) / logRange));
+    boostCurve[i] = 1 + (SPECTRUM_BOOST_MAX - 1) * logPos;
+  }
+}
+
+// Read the current FFT, apply the boost curve, store in compensatedSpectrum.
+// Call once per frame before anything else that touches the audio data.
+function captureCompensatedSpectrum() {
+  if (!analyser) return;
+  if (!boostCurve || boostCurve.length !== analyser.frequencyBinCount) {
+    buildBoostCurve();
+  }
+  analyser.getByteFrequencyData(rawFreqBuf);
+  for (let i = 0; i < rawFreqBuf.length; i++) {
+    const boosted = rawFreqBuf[i] * boostCurve[i];
+    compensatedSpectrum[i] = boosted > 255 ? 255 : boosted;
+  }
+}
 let freqRangeLow  = DEFAULT_FREQ_LOW;
 let freqRangeHigh = DEFAULT_FREQ_HIGH;
 
@@ -2522,21 +2569,17 @@ function formatFreq(hz) {
   return Math.round(hz) + ' Hz';
 }
 
-// Log-interpolate the 7 default boundary points between the new low/high.
-// With default low/high the boundaries map back to the original presets
-// exactly, so the Techno/909 tuning is preserved out of the box.
+// Split the current [low, high] range into six logarithmically-equal
+// bands. The six resulting boundary points sit at i/6 fractions of
+// log(high/low), so the dashed guide-lines on the panel appear at
+// visually equal intervals — matching the Figma design intent.
 function recalculateFreqBands() {
-  const defaultLogRange = Math.log10(DEFAULT_FREQ_HIGH / DEFAULT_FREQ_LOW);
-  const newLogLow  = Math.log10(freqRangeLow);
-  const newLogHigh = Math.log10(freqRangeHigh);
-  const newLogRange = newLogHigh - newLogLow;
-  const boundaries = DEFAULT_FREQ_BOUNDARIES.map(f => {
-    const normalized = Math.log10(f / DEFAULT_FREQ_LOW) / defaultLogRange;
-    return Math.pow(10, newLogLow + normalized * newLogRange);
-  });
+  const logLow  = Math.log10(freqRangeLow);
+  const logHigh = Math.log10(freqRangeHigh);
+  const step = (logHigh - logLow) / 6;
   for (let i = 0; i < 6; i++) {
-    freqBands[i][0] = boundaries[i];
-    freqBands[i][1] = boundaries[i + 1];
+    freqBands[i][0] = Math.pow(10, logLow + i * step);
+    freqBands[i][1] = Math.pow(10, logLow + (i + 1) * step);
   }
 }
 
@@ -2574,16 +2617,17 @@ const SPECTRUM_BARS = 32;
 const SPECTRUM_SMOOTHING = 0.85;
 const smoothedSpectrum = new Float32Array(SPECTRUM_BARS);
 
-// Called from the main animate loop while mic is live
+// Called from the main animate loop while mic is live. Reads from
+// `compensatedSpectrum` (populated by captureCompensatedSpectrum earlier
+// in the same frame), so the visualisation reflects the boost-curve-
+// compensated signal that actually drives the icons.
 function drawFreqSpectrum() {
-  if (!freqrangeCtx || !analyser) return;
+  if (!freqrangeCtx || !analyser || !compensatedSpectrum) return;
   const w = freqrangeCanvas.width;
   const h = freqrangeCanvas.height;
   if (w <= 0 || h <= 0) return;
-  const buf = new Uint8Array(analyser.frequencyBinCount);
-  analyser.getByteFrequencyData(buf);
   const nyquist = analyser.context.sampleRate / 2;
-  const binCount = buf.length;
+  const binCount = compensatedSpectrum.length;
 
   // For each of SPECTRUM_BARS log-frequency slices, average all the FFT bins
   // that fall within it, then exponentially smooth against the stored value
@@ -2595,7 +2639,7 @@ function drawFreqSpectrum() {
     const binHi = Math.min(binCount - 1, Math.ceil(fHi / nyquist * binCount));
     let sum = 0;
     let count = 0;
-    for (let b = binLo; b <= binHi; b++) { sum += buf[b]; count++; }
+    for (let b = binLo; b <= binHi; b++) { sum += compensatedSpectrum[b]; count++; }
     const current = count > 0 ? (sum / count) / 255 : 0;
     smoothedSpectrum[i] = smoothedSpectrum[i] * SPECTRUM_SMOOTHING
                         + current * (1 - SPECTRUM_SMOOTHING);
@@ -2718,6 +2762,11 @@ function setupFreqrangeHandle(handle, isLow) {
 }
 setupFreqrangeHandle(freqrangeHandleLow,  true);
 setupFreqrangeHandle(freqrangeHandleHigh, false);
+
+// Initial bands — log-equal between the default low/high. Replaces the
+// hand-tuned preset in `freqBands` so the dashed guide-lines on first
+// paint are already evenly spaced.
+recalculateFreqBands();
 
 function syncFreqrangeLayout() {
   resizeFreqCanvas();
