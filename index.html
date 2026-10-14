@@ -534,11 +534,15 @@
     pointer-events: none;
     border-radius: 4px;
   }
+  /* Triangle handles — base sits exactly on the bottom edge of the box
+     (bottom: 0, 21 px tall triangle). The clickable area extends a bit
+     below the box via overflow: visible on .freqrange-area, giving a
+     generous touch target without pushing the visual below the baseline. */
   .freqrange-handle {
     position: absolute;
-    bottom: -2px;
-    width: 16px;
-    height: 12px;
+    bottom: 0;
+    width: 26px;
+    height: 21px;
     background: transparent;
     border: none;
     padding: 0;
@@ -548,6 +552,13 @@
     color: var(--pr-grey-middle);
     transition: color 0.1s;
   }
+  .freqrange-handle::after {
+    /* invisible touch target below the triangle, so finger drags still
+       catch when the pointer is slightly below the box baseline */
+    content: '';
+    position: absolute;
+    inset: -4px -8px -8px -8px;
+  }
   .freqrange-handle svg {
     display: block;
     width: 100%;
@@ -556,31 +567,49 @@
   }
   .freqrange-handle:hover,
   .freqrange-handle.dragging { color: white; }
-  .freqrange-indicator {
+
+  /* Hz pill shown while the user is dragging a handle. Positioned beside
+     the active handle so it never gets clipped at the box edges —
+     right of the low handle, left of the high handle (CSS `right` for
+     the latter so the pill grows leftwards from the handle). */
+  .freqrange-pill {
     position: absolute;
-    top: 0;
-    width: 1px;
-    background: white;
-    height: 100%;
-    display: none;
-    pointer-events: none;
-    transform: translateX(-50%);
-  }
-  .freqrange-indicator.active { display: block; }
-  .freqrange-indicator-label {
-    position: absolute;
-    top: 4px;
-    left: 50%;
-    transform: translateX(-50%);
+    top: 29px;
+    background: var(--pr-grey-dark);
     color: white;
+    padding: 0 4px;
+    border-radius: 4px;
     font-family: var(--font-ui);
     font-size: 14px;
-    line-height: 1;
+    line-height: 24px;
     white-space: nowrap;
-    padding: 2px 6px;
-    background: rgba(0, 0, 0, 0.6);
-    border-radius: 3px;
+    pointer-events: none;
+    display: none;
   }
+  .freqrange-pill.active { display: block; }
+
+  /* "No audio input" overlay — shown whenever the mic isn't running.
+     Replaces the spectrum, handles, and pill (via no-signal class). */
+  .freqrange-no-input {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--pr-grey-dark);
+    color: white;
+    padding: 0 4px;
+    border-radius: 4px;
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 24px;
+    white-space: nowrap;
+    pointer-events: none;
+    display: none;
+  }
+  .freqrange-area.no-signal .freqrange-no-input { display: block; }
+  .freqrange-area.no-signal .freqrange-canvas,
+  .freqrange-area.no-signal .freqrange-handle,
+  .freqrange-area.no-signal .freqrange-pill { display: none; }
+
   .freqrange-label {
     font-family: var(--font-ui);
     font-size: 14px;
@@ -1055,16 +1084,15 @@
         </div>
         <div class="page" data-page="frequency">
           <div class="freqrange">
-            <div class="freqrange-area" id="freqrangeArea">
+            <div class="freqrange-area no-signal" id="freqrangeArea">
               <canvas class="freqrange-canvas" id="freqrangeCanvas"></canvas>
-              <div class="freqrange-indicator" id="freqrangeIndicator">
-                <span class="freqrange-indicator-label" id="freqrangeIndicatorLabel">—</span>
-              </div>
+              <div class="freqrange-no-input"><span>No audio input</span></div>
+              <div class="freqrange-pill" id="freqrangePill">—</div>
               <button class="freqrange-handle freqrange-handle--low" id="freqrangeHandleLow" type="button" title="Low frequency boundary" aria-label="Low frequency boundary">
-                <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><polygon points="8,0 16,12 0,12"/></svg>
+                <svg viewBox="0 0 26 21" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><polygon points="13,0 26,21 0,21"/></svg>
               </button>
               <button class="freqrange-handle freqrange-handle--high" id="freqrangeHandleHigh" type="button" title="High frequency boundary" aria-label="High frequency boundary">
-                <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><polygon points="8,0 16,12 0,12"/></svg>
+                <svg viewBox="0 0 26 21" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><polygon points="13,0 26,21 0,21"/></svg>
               </button>
             </div>
             <span class="freqrange-label">Frequency range</span>
@@ -2425,6 +2453,7 @@ btn.addEventListener('click', async () => {
     cancelAnimationFrame(animId);
     setMicState('Start microphone', false);
     btn.title = '';
+    setFreqrangeMicActive(false);
     resetUI();
     return;
   }
@@ -2440,6 +2469,7 @@ btn.addEventListener('click', async () => {
     running = true;
     setMicState('Stop microphone', true);
     btn.title = '';
+    setFreqrangeMicActive(true);
     animate();
   } catch (e) {
     // Inline error handling — no more blocking alert(). The label carries the
@@ -2515,8 +2545,7 @@ const freqrangeCanvas = document.getElementById('freqrangeCanvas');
 const freqrangeCtx = freqrangeCanvas ? freqrangeCanvas.getContext('2d') : null;
 const freqrangeHandleLow  = document.getElementById('freqrangeHandleLow');
 const freqrangeHandleHigh = document.getElementById('freqrangeHandleHigh');
-const freqrangeIndicator  = document.getElementById('freqrangeIndicator');
-const freqrangeIndicatorLabel = document.getElementById('freqrangeIndicatorLabel');
+const freqrangePill = document.getElementById('freqrangePill');
 
 function resizeFreqCanvas() {
   if (!freqrangeArea || !freqrangeCanvas) return;
@@ -2566,8 +2595,33 @@ function drawFreqSpectrum() {
   const lowX  = Math.round(freqToXFraction(freqRangeLow)  * w);
   const highX = Math.round(freqToXFraction(freqRangeHigh) * w);
   freqrangeCtx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-  if (lowX > 0)       freqrangeCtx.fillRect(0, 0, lowX, h);
-  if (highX < w)      freqrangeCtx.fillRect(highX, 0, w - highX, h);
+  if (lowX > 0)  freqrangeCtx.fillRect(0, 0, lowX, h);
+  if (highX < w) freqrangeCtx.fillRect(highX, 0, w - highX, h);
+
+  // Five dashed vertical lines at the internal 6-band boundaries, inside
+  // the active range. Drawn after the dim overlay so they only show up
+  // in the lit (in-range) section of the box.
+  freqrangeCtx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+  freqrangeCtx.setLineDash([3, 3]);
+  freqrangeCtx.lineWidth = 1;
+  for (let i = 1; i < 6; i++) {
+    const freq = freqBands[i][0];                    // left boundary of channel i
+    const x = Math.round(freqToXFraction(freq) * w) + 0.5;  // crisp 1-px line
+    freqrangeCtx.beginPath();
+    freqrangeCtx.moveTo(x, 0);
+    freqrangeCtx.lineTo(x, h);
+    freqrangeCtx.stroke();
+  }
+  freqrangeCtx.setLineDash([]);
+}
+
+// Toggle the "No audio input" overlay — called from the mic start/stop
+// paths. On start we also do a one-off canvas resize since the panel may
+// have been in the no-signal state (display: none) when the layout settled.
+function setFreqrangeMicActive(active) {
+  if (!freqrangeArea) return;
+  freqrangeArea.classList.toggle('no-signal', !active);
+  if (active) resizeFreqCanvas();
 }
 
 // Shared pointer drag plumbing for both handles. Low handle clamps against
@@ -2575,12 +2629,22 @@ function drawFreqSpectrum() {
 function setupFreqrangeHandle(handle, isLow) {
   if (!handle) return;
   let activeId = null;
-  function showIndicator(freq) {
+  function showPill(freq) {
     const rect = freqrangeArea.getBoundingClientRect();
-    const x = freqToXFraction(freq) * rect.width;
-    freqrangeIndicator.style.left = x + 'px';
-    freqrangeIndicator.classList.add('active');
-    freqrangeIndicatorLabel.textContent = formatFreq(freq);
+    const handleX = freqToXFraction(freq) * rect.width;
+    freqrangePill.textContent = formatFreq(freq);
+    freqrangePill.classList.add('active');
+    const GAP = 8;  // space between handle centre and pill edge
+    if (isLow) {
+      // low handle → pill grows to the right from the handle
+      freqrangePill.style.left  = (handleX + GAP) + 'px';
+      freqrangePill.style.right = 'auto';
+    } else {
+      // high handle → pill grows to the left from the handle; CSS `right`
+      // measures from the parent's right edge, so convert accordingly
+      freqrangePill.style.left  = 'auto';
+      freqrangePill.style.right = (rect.width - handleX + GAP) + 'px';
+    }
   }
   function onMove(e) {
     if (e.pointerId !== activeId) return;
@@ -2595,13 +2659,13 @@ function setupFreqrangeHandle(handle, isLow) {
     }
     recalculateFreqBands();
     updateFreqrangeHandles();
-    showIndicator(isLow ? freqRangeLow : freqRangeHigh);
+    showPill(isLow ? freqRangeLow : freqRangeHigh);
   }
   function onUp(e) {
     if (e.pointerId !== activeId) return;
     activeId = null;
     handle.classList.remove('dragging');
-    freqrangeIndicator.classList.remove('active');
+    freqrangePill.classList.remove('active');
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
     window.removeEventListener('pointercancel', onUp);
@@ -2612,7 +2676,7 @@ function setupFreqrangeHandle(handle, isLow) {
     activeId = e.pointerId;
     handle.classList.add('dragging');
     try { handle.setPointerCapture(e.pointerId); } catch (_) {}
-    showIndicator(isLow ? freqRangeLow : freqRangeHigh);
+    showPill(isLow ? freqRangeLow : freqRangeHigh);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
