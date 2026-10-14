@@ -9,7 +9,7 @@ The project runs entirely in the browser as a single self-contained HTML file. T
 Originally designed and developed by Markus Remscheid / [H2D2](https://www.h2d2.de).
 
 ## Live Demo
-www.h2d2.de/pixrecorder/
+www.h2d2.de/pixrecorder
 
 ## Thanks 💚
 H2D2 Your UX and UI Agency in Berlin www.h2d2.de
