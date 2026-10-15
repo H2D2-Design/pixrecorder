@@ -514,7 +514,12 @@
     flex-direction: column;
     align-items: center;
     gap: 4px;
-    padding: 0 8px;
+    /* 13 px = half of the 26 px triangle. Lets the handles overhang the
+       freqrange-area edges by half their width when freqRangeLow / High
+       are at FREQ_MIN / FREQ_MAX, instead of being clipped by the
+       .page { overflow: hidden } boundary. Same approach as the colour
+       picker, where .bgcolor reserves 4 px for the thumb's outer ring. */
+    padding: 0 13px;
     box-sizing: border-box;
   }
   .freqrange-area {
@@ -2500,20 +2505,25 @@ btn.addEventListener('click', async () => {
 // ──────────────────────────────────────────────────────────────────────
 const FREQ_MIN = 20;
 const FREQ_MAX = 20000;
-const DEFAULT_FREQ_LOW  = 40;
-const DEFAULT_FREQ_HIGH = 18000;
+const DEFAULT_FREQ_LOW  = 30;
+const DEFAULT_FREQ_HIGH = 13000;
 const MIN_RANGE_RATIO   = 10;     // minimum high/low ratio = 1 decade
 
 // Perceptual boost curve — compensates for the natural low-frequency
 // dominance of most music by scaling the raw FFT bins by a factor that
-// rises linearly from 1× at FREQ_MIN to SPECTRUM_BOOST_MAX at FREQ_MAX
-// (linear in log-frequency, matching how we lay out the spectrum display
-// and the six channel bands). The result is the mathematical starting
-// point for every downstream calculation this frame — both the panel-2
-// spectrum visualisation and the per-channel averages that drive the
-// icon animation read it. The user's Gain, Scale, Rotate etc. sliders
-// then modulate this already-compensated signal.
-const SPECTRUM_BOOST_MAX = 4;
+// rises along a convex curve from 1× at FREQ_MIN up to SPECTRUM_BOOST_MAX
+// at FREQ_MAX. The curve is `logPos^BOOST_CURVE_EXP`: linear in
+// log-frequency position raised to a power so the boost is almost nothing
+// through the bass and lower mids and only ramps up near the top of the
+// range. That reflects reality — lows are rarely the problem, it's the
+// air frequencies that need a hand to register visually.
+//
+// The compensated spectrum feeds the per-channel averages that drive the
+// icons. The panel-2 spectrum DISPLAY shows the raw (unboosted) FFT so
+// what the user sees there is the actual signal — the boost is a hidden
+// pre-stage for animation, not a visualisation artefact.
+const SPECTRUM_BOOST_MAX = 4;       // multiplier at FREQ_MAX (20 kHz)
+const BOOST_CURVE_EXP   = 2;        // 1 = linear, 2 = gentle convex, 3+ = steeper top
 let boostCurve = null;              // Float32Array per FFT bin
 let rawFreqBuf = null;              // reusable Uint8Array, FFT bin count
 let compensatedSpectrum = null;     // Float32Array, 0-255 range, clipped
@@ -2533,7 +2543,8 @@ function buildBoostCurve() {
     const freq = (i + 0.5) / binCount * nyquist;
     const safe = Math.max(freq, FREQ_MIN);
     const logPos = Math.max(0, Math.min(1, (Math.log10(safe) - logMin) / logRange));
-    boostCurve[i] = 1 + (SPECTRUM_BOOST_MAX - 1) * logPos;
+    const shaped = Math.pow(logPos, BOOST_CURVE_EXP);
+    boostCurve[i] = 1 + (SPECTRUM_BOOST_MAX - 1) * shaped;
   }
 }
 
@@ -2610,24 +2621,24 @@ function updateFreqrangeHandles() {
 // Resolution of the spectrum display (number of log-spaced sample points
 // across the box). Lower = chunkier shape; higher = finer gradient.
 // 32 reads clearly as a shape of the signal without turning into pixel noise.
-const SPECTRUM_BARS = 32;
+const SPECTRUM_BARS = 16;
 // Time smoothing — each frame the stored magnitude is pulled towards the
 // current instant value by (1 − alpha). Higher alpha → calmer / laggier
 // response; lower → snappier. 0.85 gives a steady "cross-section" feel.
 const SPECTRUM_SMOOTHING = 0.85;
 const smoothedSpectrum = new Float32Array(SPECTRUM_BARS);
 
-// Called from the main animate loop while mic is live. Reads from
-// `compensatedSpectrum` (populated by captureCompensatedSpectrum earlier
-// in the same frame), so the visualisation reflects the boost-curve-
-// compensated signal that actually drives the icons.
+// Called from the main animate loop while mic is live. Reads the RAW
+// FFT buffer (`rawFreqBuf`, populated by captureCompensatedSpectrum
+// earlier in the same frame) so the panel shows the unboosted spectrum.
+// The boost curve is a hidden pre-stage that only affects icon reaction.
 function drawFreqSpectrum() {
-  if (!freqrangeCtx || !analyser || !compensatedSpectrum) return;
+  if (!freqrangeCtx || !analyser || !rawFreqBuf) return;
   const w = freqrangeCanvas.width;
   const h = freqrangeCanvas.height;
   if (w <= 0 || h <= 0) return;
   const nyquist = analyser.context.sampleRate / 2;
-  const binCount = compensatedSpectrum.length;
+  const binCount = rawFreqBuf.length;
 
   // For each of SPECTRUM_BARS log-frequency slices, average all the FFT bins
   // that fall within it, then exponentially smooth against the stored value
@@ -2639,7 +2650,7 @@ function drawFreqSpectrum() {
     const binHi = Math.min(binCount - 1, Math.ceil(fHi / nyquist * binCount));
     let sum = 0;
     let count = 0;
-    for (let b = binLo; b <= binHi; b++) { sum += compensatedSpectrum[b]; count++; }
+    for (let b = binLo; b <= binHi; b++) { sum += rawFreqBuf[b]; count++; }
     const current = count > 0 ? (sum / count) / 255 : 0;
     smoothedSpectrum[i] = smoothedSpectrum[i] * SPECTRUM_SMOOTHING
                         + current * (1 - SPECTRUM_SMOOTHING);
