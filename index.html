@@ -2618,10 +2618,16 @@ function updateFreqrangeHandles() {
   freqrangeHandleHigh.style.left = (freqToXFraction(freqRangeHigh) * w) + 'px';
 }
 
-// Resolution of the spectrum display (number of log-spaced sample points
-// across the box). Lower = chunkier shape; higher = finer gradient.
-// 32 reads clearly as a shape of the signal without turning into pixel noise.
-const SPECTRUM_BARS = 16;
+// Spectrum rendering constants — each of the 6 channel bands is shown
+// as its own SPECTRUM_SUB_BARS-step vertical bar graph inside its own
+// log-frequency range. Each sub-bar is a single filled column so the
+// result reads as one connected surface, not a stack of LED cells.
+// Dragging the Low/High handles reshapes the channel bands and the
+// sub-bars follow — each group of 4 bars always fills exactly the span
+// between two dashed lines.
+const SPECTRUM_SUB_BARS  = 4;              // sub-bars per channel band
+const SPECTRUM_BARS      = 6 * SPECTRUM_SUB_BARS;   // 24 bars total
+const SPECTRUM_BAR_GAP   = 0;              // horizontal gap between adjacent columns (0 = perfectly tiled surface)
 // Time smoothing — each frame the stored magnitude is pulled towards the
 // current instant value by (1 − alpha). Higher alpha → calmer / laggier
 // response; lower → snappier. 0.85 gives a steady "cross-section" feel.
@@ -2640,38 +2646,48 @@ function drawFreqSpectrum() {
   const nyquist = analyser.context.sampleRate / 2;
   const binCount = rawFreqBuf.length;
 
-  // For each of SPECTRUM_BARS log-frequency slices, average all the FFT bins
-  // that fall within it, then exponentially smooth against the stored value
-  // so the shape evolves gently instead of flickering with every frame.
-  for (let i = 0; i < SPECTRUM_BARS; i++) {
-    const fLo = xFractionToFreq(i / SPECTRUM_BARS);
-    const fHi = xFractionToFreq((i + 1) / SPECTRUM_BARS);
-    const binLo = Math.max(0, Math.floor(fLo / nyquist * binCount));
-    const binHi = Math.min(binCount - 1, Math.ceil(fHi / nyquist * binCount));
-    let sum = 0;
-    let count = 0;
-    for (let b = binLo; b <= binHi; b++) { sum += rawFreqBuf[b]; count++; }
-    const current = count > 0 ? (sum / count) / 255 : 0;
-    smoothedSpectrum[i] = smoothedSpectrum[i] * SPECTRUM_SMOOTHING
-                        + current * (1 - SPECTRUM_SMOOTHING);
-  }
-
   freqrangeCtx.clearRect(0, 0, w, h);
-  // Spectrum as a filled polygon through the 32 smoothed sample points.
-  // Each point sits at the centre of its log-frequency slice.
-  freqrangeCtx.beginPath();
-  freqrangeCtx.moveTo(0, h);
-  freqrangeCtx.lineTo(0, h - smoothedSpectrum[0] * h);
-  for (let i = 0; i < SPECTRUM_BARS; i++) {
-    const x = ((i + 0.5) / SPECTRUM_BARS) * w;
-    const y = h - smoothedSpectrum[i] * h;
-    freqrangeCtx.lineTo(x, y);
+  // Equaliser surface — each of the 6 channel bands shows a
+  // SPECTRUM_SUB_BARS-step bar graph inside its own log-frequency range.
+  // Each sub-bar is a single filled column so adjacent bars read as a
+  // continuous surface rather than discrete LED cells. Because the sub-
+  // bars are computed from freqBands (which recalculateFreqBands updates
+  // whenever the user drags the handles), the whole visualisation
+  // re-flows to always fill exactly between the dashed band-boundary lines.
+  freqrangeCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+  for (let ch = 0; ch < 6; ch++) {
+    const bandLo = freqBands[ch][0];
+    const bandHi = freqBands[ch][1];
+    const logLo  = Math.log10(bandLo);
+    const logStep = (Math.log10(bandHi) - logLo) / SPECTRUM_SUB_BARS;
+    for (let sub = 0; sub < SPECTRUM_SUB_BARS; sub++) {
+      const subLo = Math.pow(10, logLo + sub * logStep);
+      const subHi = Math.pow(10, logLo + (sub + 1) * logStep);
+
+      // Sample FFT bins falling into this sub-band → magnitude 0..1
+      const binLo = Math.max(0, Math.floor(subLo / nyquist * binCount));
+      const binHi = Math.min(binCount - 1, Math.ceil(subHi / nyquist * binCount));
+      let sum = 0, count = 0;
+      for (let b = binLo; b <= binHi; b++) { sum += rawFreqBuf[b]; count++; }
+      const current = count > 0 ? (sum / count) / 255 : 0;
+
+      // Exponential time smoothing in a stable slot (channel × sub index)
+      const idx = ch * SPECTRUM_SUB_BARS + sub;
+      smoothedSpectrum[idx] = smoothedSpectrum[idx] * SPECTRUM_SMOOTHING
+                            + current * (1 - SPECTRUM_SMOOTHING);
+
+      // Draw as one solid filled column — bottom-aligned, height proportional
+      // Round xLeft and the next xLeft (= xRight here) independently and
+      // derive width from their difference, so adjacent bars tile pixel-
+      // perfect at integer boundaries instead of leaking 1-px rounding gaps.
+      const xLeft  = freqToXFraction(subLo) * w;
+      const xRight = freqToXFraction(subHi) * w;
+      const barX = Math.round(xLeft);
+      const barInnerW = Math.max(1, Math.round(xRight) - barX - SPECTRUM_BAR_GAP);
+      const barH = smoothedSpectrum[idx] * h;
+      if (barH > 0) freqrangeCtx.fillRect(barX, h - barH, barInnerW, barH);
+    }
   }
-  freqrangeCtx.lineTo(w, h - smoothedSpectrum[SPECTRUM_BARS - 1] * h);
-  freqrangeCtx.lineTo(w, h);
-  freqrangeCtx.closePath();
-  freqrangeCtx.fillStyle = 'rgba(255, 255, 255, 0.35)';
-  freqrangeCtx.fill();
 
   // Dim the out-of-range areas so the user sees which part of the spectrum
   // is actually feeding the six channels right now.
