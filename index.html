@@ -438,13 +438,12 @@
     align-items: center;
     gap: 8px;
     width: 100%;
-    /* 4 px horizontal padding reserves space for the thumb's outer ring.
-       The thumb is positioned by its centre within the picker area; when the
-       user picks a colour at the extreme edge the ring extends 4 px past
-       the picker. Without this breathing room the ring would be clipped by
-       the parent .page { overflow: hidden } that keeps swipeable pages
-       isolated from each other. */
-    padding: 0 4px;
+    /* 8 px horizontal padding reserves space for a FULL thumb half-width
+       (16 px thumb → 8 px per side) overhanging the picker. That lets the
+       user drag the thumb exactly into the extreme corners (reaching pure
+       black at bottom-left/right, pure white at top-left) without the
+       outer ring being clipped by the parent .page { overflow: hidden }. */
+    padding: 0 8px;
     box-sizing: border-box;
   }
   .bgcolor-label {
@@ -498,6 +497,18 @@
   }
   .bgcolor-hue-thumb {
     top: 50%;
+  }
+  /* Extend the clickable hit area 8 px around each picker so the user can
+     grab the thumb even when half of it overhangs the picker edge (at
+     extreme bgSat / bgVal / bgHue). The pseudo-elements are visually
+     transparent; pointer events hit them and bubble up to the existing
+     parent handler, where coordinates outside the picker rect are clamped
+     to the extreme (sat/val/hue hits 0 or 100/360). */
+  .bgcolor-sv-area::before,
+  .bgcolor-hue-area::before {
+    content: '';
+    position: absolute;
+    inset: -8px;
   }
 
   /* ────────────────────────────────────────────────────────────────────
@@ -2881,30 +2892,29 @@ function applyBgColor() {
     'linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0)),' +
     'linear-gradient(to right, rgba(255,255,255,1), hsl(' + bgHue + ', 100%, 50%))';
 
-  // Position the two thumbs with pixel-based clamping. The thumb has an
-  // 8 px inner transparent window (16 px outer − 2×4 px white ring), so its
-  // centre must stay at least 4 px (the inner radius) from any picker edge.
-  // Otherwise the inner window overflows the picker and would reveal the
-  // dark panel background behind. Data range (0-100 for sat/val, 0-360 for
-  // hue) stays unclamped — only the visual position is held inside.
-  const INNER_R = 4;
+  // Position the thumbs at the exact fraction of the picker area, no clamp.
+  // When the thumb reaches a corner its inner window would normally reveal
+  // whatever sits behind the picker — but we fill it with the picked colour
+  // further down, so the window shows the actual selection even at the edges.
   const svW = bgcolorSvArea.clientWidth;
   const svH = bgcolorSvArea.clientHeight;
   if (svW > 0 && svH > 0) {
-    const svX = Math.max(INNER_R, Math.min(svW - INNER_R, (bgSat / 100) * svW));
-    const svY = Math.max(INNER_R, Math.min(svH - INNER_R, ((100 - bgVal) / 100) * svH));
-    bgcolorSvThumb.style.left = svX + 'px';
-    bgcolorSvThumb.style.top  = svY + 'px';
+    bgcolorSvThumb.style.left = ((bgSat / 100) * svW) + 'px';
+    bgcolorSvThumb.style.top  = (((100 - bgVal) / 100) * svH) + 'px';
   }
   const hueW = bgcolorHueArea.clientWidth;
   if (hueW > 0) {
-    const hueX = Math.max(INNER_R, Math.min(hueW - INNER_R, (bgHue / 360) * hueW));
-    bgcolorHueThumb.style.left = hueX + 'px';
+    bgcolorHueThumb.style.left = ((bgHue / 360) * hueW) + 'px';
   }
 
-  // Push the colour to the stage CSS variable
+  // Push the colour to the stage CSS variable and to the sv-thumb's own
+  // background. The hue thumb shows a pure version of the current hue so
+  // its window matches the rainbow strip underneath even at the extremes.
   const [r, g, b] = hsvToRgb(bgHue, bgSat, bgVal);
-  document.documentElement.style.setProperty('--pr-stage', 'rgb(' + r + ', ' + g + ', ' + b + ')');
+  const stageRgb = 'rgb(' + r + ', ' + g + ', ' + b + ')';
+  document.documentElement.style.setProperty('--pr-stage', stageRgb);
+  bgcolorSvThumb.style.background = stageRgb;
+  bgcolorHueThumb.style.background = 'hsl(' + bgHue + ', 100%, 50%)';
 }
 
 function setupBgColorArea(area, applyFromEvent) {
