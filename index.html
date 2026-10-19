@@ -438,13 +438,12 @@
     align-items: center;
     gap: 8px;
     width: 100%;
-    /* 4 px horizontal padding reserves space for the thumb's outer ring.
-       The thumb is positioned by its centre within the picker area; when the
-       user picks a colour at the extreme edge the ring extends 4 px past
-       the picker. Without this breathing room the ring would be clipped by
-       the parent .page { overflow: hidden } that keeps swipeable pages
-       isolated from each other. */
-    padding: 0 4px;
+    /* 8 px horizontal padding reserves space for a FULL thumb half-width
+       (16 px thumb → 8 px per side) overhanging the picker. That lets the
+       user drag the thumb exactly into the extreme corners (reaching pure
+       black at bottom-left/right, pure white at top-left) without the
+       outer ring being clipped by the parent .page { overflow: hidden }. */
+    padding: 0 8px;
     box-sizing: border-box;
   }
   .bgcolor-label {
@@ -499,6 +498,18 @@
   .bgcolor-hue-thumb {
     top: 50%;
   }
+  /* Extend the clickable hit area 8 px around each picker so the user can
+     grab the thumb even when half of it overhangs the picker edge (at
+     extreme bgSat / bgVal / bgHue). The pseudo-elements are visually
+     transparent; pointer events hit them and bubble up to the existing
+     parent handler, where coordinates outside the picker rect are clamped
+     to the extreme (sat/val/hue hits 0 or 100/360). */
+  .bgcolor-sv-area::before,
+  .bgcolor-hue-area::before {
+    content: '';
+    position: absolute;
+    inset: -8px;
+  }
 
   /* ────────────────────────────────────────────────────────────────────
      Frequency range panel — real-time spectrum visualization with two
@@ -514,7 +525,12 @@
     flex-direction: column;
     align-items: center;
     gap: 4px;
-    padding: 0 8px;
+    /* 13 px = half of the 26 px triangle. Lets the handles overhang the
+       freqrange-area edges by half their width when freqRangeLow / High
+       are at FREQ_MIN / FREQ_MAX, instead of being clipped by the
+       .page { overflow: hidden } boundary. Same approach as the colour
+       picker, where .bgcolor reserves 4 px for the thumb's outer ring. */
+    padding: 0 13px;
     box-sizing: border-box;
   }
   .freqrange-area {
@@ -2500,20 +2516,25 @@ btn.addEventListener('click', async () => {
 // ──────────────────────────────────────────────────────────────────────
 const FREQ_MIN = 20;
 const FREQ_MAX = 20000;
-const DEFAULT_FREQ_LOW  = 40;
-const DEFAULT_FREQ_HIGH = 18000;
+const DEFAULT_FREQ_LOW  = 30;
+const DEFAULT_FREQ_HIGH = 13000;
 const MIN_RANGE_RATIO   = 10;     // minimum high/low ratio = 1 decade
 
 // Perceptual boost curve — compensates for the natural low-frequency
 // dominance of most music by scaling the raw FFT bins by a factor that
-// rises linearly from 1× at FREQ_MIN to SPECTRUM_BOOST_MAX at FREQ_MAX
-// (linear in log-frequency, matching how we lay out the spectrum display
-// and the six channel bands). The result is the mathematical starting
-// point for every downstream calculation this frame — both the panel-2
-// spectrum visualisation and the per-channel averages that drive the
-// icon animation read it. The user's Gain, Scale, Rotate etc. sliders
-// then modulate this already-compensated signal.
-const SPECTRUM_BOOST_MAX = 4;
+// rises along a convex curve from 1× at FREQ_MIN up to SPECTRUM_BOOST_MAX
+// at FREQ_MAX. The curve is `logPos^BOOST_CURVE_EXP`: linear in
+// log-frequency position raised to a power so the boost is almost nothing
+// through the bass and lower mids and only ramps up near the top of the
+// range. That reflects reality — lows are rarely the problem, it's the
+// air frequencies that need a hand to register visually.
+//
+// The compensated spectrum feeds the per-channel averages that drive the
+// icons. The panel-2 spectrum DISPLAY shows the raw (unboosted) FFT so
+// what the user sees there is the actual signal — the boost is a hidden
+// pre-stage for animation, not a visualisation artefact.
+const SPECTRUM_BOOST_MAX = 4;       // multiplier at FREQ_MAX (20 kHz)
+const BOOST_CURVE_EXP   = 2;        // 1 = linear, 2 = gentle convex, 3+ = steeper top
 let boostCurve = null;              // Float32Array per FFT bin
 let rawFreqBuf = null;              // reusable Uint8Array, FFT bin count
 let compensatedSpectrum = null;     // Float32Array, 0-255 range, clipped
@@ -2528,12 +2549,14 @@ function buildBoostCurve() {
   rawFreqBuf = new Uint8Array(binCount);
   compensatedSpectrum = new Float32Array(binCount);
   boostCurve = new Float32Array(binCount);
+  smoothedBins = new Float32Array(binCount);
   for (let i = 0; i < binCount; i++) {
     // bin i covers [i * binWidth, (i+1) * binWidth]; use centre frequency
     const freq = (i + 0.5) / binCount * nyquist;
     const safe = Math.max(freq, FREQ_MIN);
     const logPos = Math.max(0, Math.min(1, (Math.log10(safe) - logMin) / logRange));
-    boostCurve[i] = 1 + (SPECTRUM_BOOST_MAX - 1) * logPos;
+    const shaped = Math.pow(logPos, BOOST_CURVE_EXP);
+    boostCurve[i] = 1 + (SPECTRUM_BOOST_MAX - 1) * shaped;
   }
 }
 
@@ -2607,60 +2630,82 @@ function updateFreqrangeHandles() {
   freqrangeHandleHigh.style.left = (freqToXFraction(freqRangeHigh) * w) + 'px';
 }
 
-// Resolution of the spectrum display (number of log-spaced sample points
-// across the box). Lower = chunkier shape; higher = finer gradient.
-// 32 reads clearly as a shape of the signal without turning into pixel noise.
-const SPECTRUM_BARS = 32;
-// Time smoothing — each frame the stored magnitude is pulled towards the
-// current instant value by (1 − alpha). Higher alpha → calmer / laggier
-// response; lower → snappier. 0.85 gives a steady "cross-section" feel.
+// Spectrum rendering constants — each of the 6 channel bands is shown
+// as its own SPECTRUM_SUB_BARS-step vertical bar graph inside its own
+// log-frequency range. Each sub-bar is a single filled column so the
+// result reads as one connected surface, not a stack of LED cells.
+// Dragging the Low/High handles reshapes the channel bands and the
+// sub-bars follow — each group of 4 bars always fills exactly the span
+// between two dashed lines.
+const SPECTRUM_SUB_BARS  = 4;              // sub-bars per channel band
+const SPECTRUM_BAR_GAP   = 0;              // horizontal gap between adjacent columns (0 = perfectly tiled surface)
+// Time smoothing — applied per FFT bin, not per bar, so that when the
+// user drags a handle and the bar grid re-flows underneath, each bar
+// still reads a stable smoothed value from the bins it covers.
 const SPECTRUM_SMOOTHING = 0.85;
-const smoothedSpectrum = new Float32Array(SPECTRUM_BARS);
+let smoothedBins = null;                   // Float32Array sized to FFT bin count
 
-// Called from the main animate loop while mic is live. Reads from
-// `compensatedSpectrum` (populated by captureCompensatedSpectrum earlier
-// in the same frame), so the visualisation reflects the boost-curve-
-// compensated signal that actually drives the icons.
+// Called from the main animate loop while mic is live. Reads the RAW
+// FFT buffer (`rawFreqBuf`, populated by captureCompensatedSpectrum
+// earlier in the same frame) so the panel shows the unboosted spectrum.
+// The boost curve is a hidden pre-stage that only affects icon reaction.
 function drawFreqSpectrum() {
-  if (!freqrangeCtx || !analyser || !compensatedSpectrum) return;
+  if (!freqrangeCtx || !analyser || !rawFreqBuf) return;
   const w = freqrangeCanvas.width;
   const h = freqrangeCanvas.height;
   if (w <= 0 || h <= 0) return;
   const nyquist = analyser.context.sampleRate / 2;
-  const binCount = compensatedSpectrum.length;
+  const binCount = rawFreqBuf.length;
 
-  // For each of SPECTRUM_BARS log-frequency slices, average all the FFT bins
-  // that fall within it, then exponentially smooth against the stored value
-  // so the shape evolves gently instead of flickering with every frame.
-  for (let i = 0; i < SPECTRUM_BARS; i++) {
-    const fLo = xFractionToFreq(i / SPECTRUM_BARS);
-    const fHi = xFractionToFreq((i + 1) / SPECTRUM_BARS);
-    const binLo = Math.max(0, Math.floor(fLo / nyquist * binCount));
-    const binHi = Math.min(binCount - 1, Math.ceil(fHi / nyquist * binCount));
-    let sum = 0;
-    let count = 0;
-    for (let b = binLo; b <= binHi; b++) { sum += compensatedSpectrum[b]; count++; }
-    const current = count > 0 ? (sum / count) / 255 : 0;
-    smoothedSpectrum[i] = smoothedSpectrum[i] * SPECTRUM_SMOOTHING
-                        + current * (1 - SPECTRUM_SMOOTHING);
+  // Smooth per FFT bin — stable across handle drags that re-flow the
+  // bar grid, because the smoothing is keyed to bins (fixed) rather
+  // than to bar indices (which shift when logStep changes).
+  if (smoothedBins) {
+    const inject = 1 - SPECTRUM_SMOOTHING;
+    for (let b = 0; b < binCount; b++) {
+      smoothedBins[b] = smoothedBins[b] * SPECTRUM_SMOOTHING + rawFreqBuf[b] * inject;
+    }
   }
 
   freqrangeCtx.clearRect(0, 0, w, h);
-  // Spectrum as a filled polygon through the 32 smoothed sample points.
-  // Each point sits at the centre of its log-frequency slice.
-  freqrangeCtx.beginPath();
-  freqrangeCtx.moveTo(0, h);
-  freqrangeCtx.lineTo(0, h - smoothedSpectrum[0] * h);
-  for (let i = 0; i < SPECTRUM_BARS; i++) {
-    const x = ((i + 0.5) / SPECTRUM_BARS) * w;
-    const y = h - smoothedSpectrum[i] * h;
-    freqrangeCtx.lineTo(x, y);
+  // Full-spectrum equaliser surface — 24 sub-bars live inside the active
+  // range (freqRangeLow..High): 6 channel bands × SPECTRUM_SUB_BARS each.
+  // The SAME log-step continues outside the active range so the whole
+  // spectrum stays visible; the dim overlay below darkens the out-of-
+  // range portion. Each sub-bar is a single filled column so adjacent
+  // bars read as one connected surface.
+  const logMinF = Math.log10(FREQ_MIN);
+  const logMaxF = Math.log10(FREQ_MAX);
+  const logRLo = Math.log10(freqRangeLow);
+  const logRHi = Math.log10(freqRangeHigh);
+  const logStep = (logRHi - logRLo) / (6 * SPECTRUM_SUB_BARS);
+  const belowCount = Math.max(0, Math.ceil((logRLo - logMinF) / logStep));
+  const aboveCount = Math.max(0, Math.ceil((logMaxF - logRHi) / logStep));
+  const logStart = logRLo - belowCount * logStep;
+  const totalBars = belowCount + 6 * SPECTRUM_SUB_BARS + aboveCount;
+
+  freqrangeCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+  for (let i = 0; i < totalBars; i++) {
+    const subLo = Math.pow(10, logStart + i * logStep);
+    const subHi = Math.pow(10, logStart + (i + 1) * logStep);
+
+    // Average smoothed bins in this sub-range → magnitude 0..1
+    const binLo = Math.max(0, Math.floor(subLo / nyquist * binCount));
+    const binHi = Math.min(binCount - 1, Math.ceil(subHi / nyquist * binCount));
+    let sum = 0, count = 0;
+    for (let b = binLo; b <= binHi; b++) { sum += smoothedBins[b]; count++; }
+    const magnitude = count > 0 ? (sum / count) / 255 : 0;
+
+    // Round boundaries independently, clip to canvas, derive width from
+    // the difference so adjacent bars tile pixel-perfect without gaps.
+    const barX = Math.max(0, Math.round(freqToXFraction(subLo) * w));
+    const barXNext = Math.min(w, Math.round(freqToXFraction(subHi) * w));
+    const barInnerW = Math.max(0, barXNext - barX - SPECTRUM_BAR_GAP);
+    if (barInnerW > 0) {
+      const barH = magnitude * h;
+      if (barH > 0) freqrangeCtx.fillRect(barX, h - barH, barInnerW, barH);
+    }
   }
-  freqrangeCtx.lineTo(w, h - smoothedSpectrum[SPECTRUM_BARS - 1] * h);
-  freqrangeCtx.lineTo(w, h);
-  freqrangeCtx.closePath();
-  freqrangeCtx.fillStyle = 'rgba(255, 255, 255, 0.35)';
-  freqrangeCtx.fill();
 
   // Dim the out-of-range areas so the user sees which part of the spectrum
   // is actually feeding the six channels right now.
@@ -2694,9 +2739,9 @@ function setFreqrangeMicActive(active) {
   if (!freqrangeArea) return;
   freqrangeArea.classList.toggle('no-signal', !active);
   if (active) {
-    // Fresh session — clear the time-smoothed buffer so the first frame
+    // Fresh session — clear the per-bin smoothing so the first frame
     // starts from zero instead of showing a stale shape from last time.
-    smoothedSpectrum.fill(0);
+    if (smoothedBins) smoothedBins.fill(0);
     resizeFreqCanvas();
   }
 }
@@ -2847,30 +2892,29 @@ function applyBgColor() {
     'linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0)),' +
     'linear-gradient(to right, rgba(255,255,255,1), hsl(' + bgHue + ', 100%, 50%))';
 
-  // Position the two thumbs with pixel-based clamping. The thumb has an
-  // 8 px inner transparent window (16 px outer − 2×4 px white ring), so its
-  // centre must stay at least 4 px (the inner radius) from any picker edge.
-  // Otherwise the inner window overflows the picker and would reveal the
-  // dark panel background behind. Data range (0-100 for sat/val, 0-360 for
-  // hue) stays unclamped — only the visual position is held inside.
-  const INNER_R = 4;
+  // Position the thumbs at the exact fraction of the picker area, no clamp.
+  // When the thumb reaches a corner its inner window would normally reveal
+  // whatever sits behind the picker — but we fill it with the picked colour
+  // further down, so the window shows the actual selection even at the edges.
   const svW = bgcolorSvArea.clientWidth;
   const svH = bgcolorSvArea.clientHeight;
   if (svW > 0 && svH > 0) {
-    const svX = Math.max(INNER_R, Math.min(svW - INNER_R, (bgSat / 100) * svW));
-    const svY = Math.max(INNER_R, Math.min(svH - INNER_R, ((100 - bgVal) / 100) * svH));
-    bgcolorSvThumb.style.left = svX + 'px';
-    bgcolorSvThumb.style.top  = svY + 'px';
+    bgcolorSvThumb.style.left = ((bgSat / 100) * svW) + 'px';
+    bgcolorSvThumb.style.top  = (((100 - bgVal) / 100) * svH) + 'px';
   }
   const hueW = bgcolorHueArea.clientWidth;
   if (hueW > 0) {
-    const hueX = Math.max(INNER_R, Math.min(hueW - INNER_R, (bgHue / 360) * hueW));
-    bgcolorHueThumb.style.left = hueX + 'px';
+    bgcolorHueThumb.style.left = ((bgHue / 360) * hueW) + 'px';
   }
 
-  // Push the colour to the stage CSS variable
+  // Push the colour to the stage CSS variable and to the sv-thumb's own
+  // background. The hue thumb shows a pure version of the current hue so
+  // its window matches the rainbow strip underneath even at the extremes.
   const [r, g, b] = hsvToRgb(bgHue, bgSat, bgVal);
-  document.documentElement.style.setProperty('--pr-stage', 'rgb(' + r + ', ' + g + ', ' + b + ')');
+  const stageRgb = 'rgb(' + r + ', ' + g + ', ' + b + ')';
+  document.documentElement.style.setProperty('--pr-stage', stageRgb);
+  bgcolorSvThumb.style.background = stageRgb;
+  bgcolorHueThumb.style.background = 'hsl(' + bgHue + ', 100%, 50%)';
 }
 
 function setupBgColorArea(area, applyFromEvent) {
