@@ -82,17 +82,21 @@
   html, body { height: 100%; background: var(--bg); color: var(--text-primary); font-family: var(--font-ui); overflow: hidden; }
   body { display: flex; flex-direction: column; min-height: 100vh; }
 
-  body::before {
-    content: '';
-    position: fixed; inset: 0;
-    background-image:
-      linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
-    background-size: 40px 40px;
-    pointer-events: none; z-index: 0;
-  }
-
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+
+  /* ── Stage background image — full-bleed, borderless, always covering the
+     viewport. Sits above the stage colour (body background) and below the
+     logo, the trails canvas and the icons. ── */
+  .stage-image {
+    position: fixed; inset: 0;
+    z-index: 0;
+    background-position: center;
+    background-size: cover;
+    background-repeat: no-repeat;
+    pointer-events: none;
+    display: none;
+  }
+  .stage-image.has-image { display: block; }
 
   /* ── Brand logo — fixed top-right of the stage, subtle background presence ── */
   .brand {
@@ -128,18 +132,11 @@
     transition: transform 0.25s ease;
   }
 
-  .channel-glow {
-    position: absolute; top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    width: 220px; height: 220px;
-    border-radius: 50%;
-    opacity: 0;
-    transition: opacity 0.08s;
-    pointer-events: none; filter: blur(40px);
-  }
-
   .channel-svg-wrap {
     width: 96px; height: 96px;
+    flex: none;                 /* keep the box size set per icon (imported SVGs
+                                   at their designed size) — don't let the 96 px
+                                   .channel flex container squeeze it */
     display: flex; align-items: center; justify-content: center;
     position: relative; z-index: 1;
   }
@@ -164,8 +161,15 @@
     display: none;
   }
   body.trails-on #trailsCanvas { display: block; }
+  /* Trails 1 fades by multiplying the canvas alpha by 0.985 each frame. The
+     canvas stores alpha in 8 bits, so once a pixel drops below ~13 % the
+     1.5 % step is less than half a level, rounding cancels it, and the pixel
+     never reaches zero — faint ghosts stay forever. Checking pixels on the
+     CPU is too costly at Retina size, so the cut happens at display time on
+     the GPU: an SVG alpha-transfer filter maps everything under 15 % to
+     zero, ramps smoothly up to 30 %, and leaves stronger trails untouched. */
+  body.trails-mode-1 #trailsCanvas { filter: url(#trails1Cut); }
   body.trails-on .channel-svg-wrap .channel-icon { opacity: 0 !important; }
-  body.trails-on .channel-glow { opacity: 0 !important; }
 
   /* ── Hint pill (briefly shown when frame is hidden) ── */
   #presentHint {
@@ -191,6 +195,16 @@
     width: 392px;
     z-index: 100;
     transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+  /* The whole control panel is a touch instrument, not text. Block iOS
+     long-press text selection (blue handles) and the callout menu, which
+     otherwise kick in when a finger rests on a slider for a moment. */
+  .control-frame,
+  .control-frame * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
   }
   .control-frame.hidden {
     opacity: 0;
@@ -356,39 +370,33 @@
   }
 
   /* ────────────────────────────────────────────────────────────────────
-     Swipeable pages — the middle section of the control panel hosts three
-     screens the user can snap between: default audio controls, frequency
-     range (placeholder for now), and background colour.
+     Pages — the middle section of the control panel hosts three screens:
+     default audio controls, frequency range, and background colour. Only
+     one is visible at a time; the user switches with the paging buttons
+     below. No swipe gesture, so touch-dragging a slider never flips pages.
      ──────────────────────────────────────────────────────────────────── */
   .pages-container {
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 16px;
   }
   .pages-scroll {
     width: 100%;
     height: 130px;                       /* kept constant so panel height never jumps */
-    overflow-x: auto;
-    overflow-y: hidden;
-    scroll-snap-type: x mandatory;
+    overflow: hidden;
     display: flex;
-    scrollbar-width: none;               /* Firefox */
-    -ms-overflow-style: none;            /* legacy Edge */
-    overscroll-behavior-x: contain;
   }
-  .pages-scroll::-webkit-scrollbar { display: none; }
   .page {
     flex: 0 0 100%;
     min-width: 100%;
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
-    display: flex;
+    display: none;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     overflow: hidden;
   }
+  .page.active { display: flex; }
   .page-placeholder {
     display: flex; flex-direction: column; align-items: center; gap: 4px;
     color: var(--pr-grey-middle);
@@ -401,28 +409,32 @@
     opacity: 0.5;
   }
 
-  /* Pagination dots below the swipeable area */
+  /* Paging buttons — 32 × 32 px touch targets, each with an 8 px dot.
+     Active page: white dot; others: grey. */
   .pages-dots {
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 6px;
-    height: 8px;
   }
   .pages-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--pr-grey-main);
+    width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent;
     border: none;
     padding: 0;
     cursor: pointer;
-    transition: background 0.15s, transform 0.15s;
+    -webkit-tap-highlight-color: transparent;
   }
-  .pages-dot:hover { background: var(--pr-grey-middle); }
-  .pages-dot.active {
+  .pages-dot::before {
+    content: '';
+    width: 8px; height: 8px;
+    border-radius: 50%;
     background: var(--pr-grey-middle);
-    transform: scale(1.3);
+    transition: background 0.15s;
   }
+  .pages-dot:hover::before { background: #b5b7c0; }
+  .pages-dot.active::before { background: white; }
+  .pages-dot:focus-visible { outline: 2px solid var(--pr-purple); outline-offset: -4px; border-radius: 4px; }
 
   /* ────────────────────────────────────────────────────────────────────
      Background colour picker (HSV)
@@ -606,6 +618,134 @@
 
   /* "No audio input" overlay — shown whenever the mic isn't running.
      Replaces the spectrum, handles, and pill (via no-signal class). */
+  /* ────────────────────────────────────────────────────────────────────
+     Background image page — three rows inside the fixed page height:
+       1. label + Fill | Original segmented toggle
+       2. preview box (tap / drop to choose; Replace / Remove when set)
+       3. horizontal Scale slider with % readout
+     Mode toggle and Scale are dimmed until an image is chosen.
+     ──────────────────────────────────────────────────────────────────── */
+  .bgimage {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0 8px;                    /* room for the slider thumb at the extremes */
+    box-sizing: border-box;
+  }
+  .bgimage-head {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 24px;
+  }
+  .bgimage-label {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 24px;
+    color: var(--pr-grey-middle);
+  }
+  .bgimage-seg {
+    display: flex;
+    background: var(--pr-grey-main);
+    border-radius: 4px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .bgimage-seg button {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 20px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--pr-grey-middle);
+    cursor: pointer;
+  }
+  .bgimage-seg button:hover { color: white; }
+  .bgimage-seg button.active { background: var(--pr-purple); color: var(--pr-grey-dark); }
+  .bgimage-box {
+    position: relative;
+    width: 100%;
+    height: 50px;
+    border-radius: 4px;
+    background-color: var(--pr-grey-main);
+    background-position: center;
+    background-size: cover;
+    background-repeat: no-repeat;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  .bgimage-box.dragover { outline: 2px solid var(--pr-purple); outline-offset: -2px; }
+  .bgimage-box:focus-visible { outline: 2px solid var(--pr-purple); outline-offset: -2px; }
+  .bgimage-pill {
+    background: var(--pr-grey-dark);
+    color: white;
+    padding: 0 8px;
+    border-radius: 4px;
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 24px;
+    white-space: nowrap;
+    border: none;
+    cursor: pointer;
+  }
+  .bgimage-pill:hover { background: #26272e; }
+  .bgimage-box .bgimage-empty { pointer-events: none; }
+  .bgimage-box.has-image .bgimage-empty { display: none; }
+  .bgimage-actions {
+    position: absolute;
+    right: 4px; bottom: 4px;
+    display: none;
+    gap: 4px;
+  }
+  .bgimage-box.has-image .bgimage-actions { display: flex; }
+  .bgimage-scale {
+    display: flex; align-items: center; gap: 12px;
+    height: 24px;
+  }
+  .bgimage-scale-label,
+  .bgimage-scale-value {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 24px;
+    color: var(--pr-grey-middle);
+    white-space: nowrap;
+  }
+  .bgimage-scale-value { min-width: 44px; text-align: right; }
+  .bgimage-scale-wrap {
+    position: relative;
+    flex: 1;
+    height: 24px;
+    cursor: pointer;
+    touch-action: none;
+  }
+  .bgimage-scale-wrap::before {          /* the 3 px track, same as the vertical sliders */
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 50%;
+    height: 3px;
+    transform: translateY(-50%);
+    background: var(--pr-grey-main);
+  }
+  .bgimage-scale-thumb {
+    position: absolute;
+    top: 50%;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--pr-purple);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    transition: box-shadow 0.15s;
+  }
+  .bgimage-scale-wrap:hover .bgimage-scale-thumb,
+  .bgimage-scale-wrap:focus-visible .bgimage-scale-thumb { box-shadow: 0 0 0 4px rgba(180,158,229,0.20); }
+  .bgimage-scale-wrap:focus-visible { outline: none; }
+  .bgimage:not(.has-image) .bgimage-seg,
+  .bgimage:not(.has-image) .bgimage-scale { opacity: 0.35; pointer-events: none; }
+
   .freqrange-no-input {
     position: absolute;
     top: 50%; left: 50%;
@@ -910,8 +1050,8 @@
       flex-wrap: wrap;
       row-gap: 8px;
     }
-    /* The swipeable pages container grows to accommodate the taller slider
-       page (two wrapped rows). Other pages are shorter but centred vertically. */
+    /* The pages container grows to accommodate the taller slider page
+       (two wrapped rows). Other pages are shorter but centred vertically. */
     .pages-scroll {
       height: 268px;
     }
@@ -968,6 +1108,7 @@
 </head>
 <body>
 <!-- Brand logo — fixed top-right of the stage, subtle background presence -->
+<div class="stage-image" id="stageImage" aria-hidden="true"></div>
 <div class="brand" aria-label="PixRecorder">
 <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
 <g clip-path="url(#pr-brand-clip)">
@@ -989,6 +1130,16 @@
 
 <!-- Trails canvas — full viewport, only visible in trails mode -->
 <canvas id="trailsCanvas"></canvas>
+<!-- Trails 1 residue cut — see #trailsCanvas CSS. Alpha transfer table over
+     21 evenly spaced inputs (0, 0.05 … 1): ≤ 0.15 → 0, a short ramp to 0.3,
+     identity above. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <filter id="trails1Cut" color-interpolation-filters="sRGB">
+    <feComponentTransfer>
+      <feFuncA type="table" tableValues="0 0 0 0 0.08 0.2 0.3 0.35 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9 0.95 1"/>
+    </feComponentTransfer>
+  </filter>
+</svg>
 
 <!-- Hint pill that briefly appears when the frame is hidden -->
 <div id="presentHint">Tap or press ESC to bring back the controls</div>
@@ -1058,7 +1209,7 @@
     <!-- Three swipeable pages: audio sliders, frequency range (placeholder), background colour -->
     <div class="pages-container">
       <div class="pages-scroll" id="pagesScroll">
-        <div class="page" data-page="default">
+        <div class="page active" data-page="default">
           <div class="vslider-row">
           <div class="vslider">
             <span class="vslider-value" id="sensValue">50</span>
@@ -1125,11 +1276,39 @@
             </div>
           </div>
         </div>
+        <div class="page" data-page="bgimage">
+          <div class="bgimage" id="bgimage">
+            <div class="bgimage-head">
+              <span class="bgimage-label">Background image</span>
+              <div class="bgimage-seg" role="group" aria-label="Image size">
+                <button type="button" class="active" data-bgimage-mode="fill" aria-pressed="true">Fill</button>
+                <button type="button" data-bgimage-mode="original" aria-pressed="false">Original</button>
+              </div>
+            </div>
+            <div class="bgimage-box" id="bgimageBox" role="button" tabindex="0" aria-label="Choose background image">
+              <span class="bgimage-pill bgimage-empty">Choose image</span>
+              <div class="bgimage-actions">
+                <button type="button" class="bgimage-pill" id="bgimageReplace">Replace</button>
+                <button type="button" class="bgimage-pill" id="bgimageRemove">Remove</button>
+              </div>
+            </div>
+            <div class="bgimage-scale">
+              <span class="bgimage-scale-label">Scale</span>
+              <div class="bgimage-scale-wrap" id="bgimageScale" role="slider" tabindex="0"
+                   aria-label="Background image scale" aria-valuemin="25" aria-valuemax="400" aria-valuenow="100">
+                <div class="bgimage-scale-thumb" id="bgimageScaleThumb"></div>
+              </div>
+              <span class="bgimage-scale-value" id="bgimageScaleValue">100 %</span>
+            </div>
+            <input type="file" id="bgimageInput" accept="image/*" hidden>
+          </div>
+        </div>
       </div>
       <div class="pages-dots" id="pagesDots">
         <button class="pages-dot active" type="button" data-page-index="0" aria-label="Default controls" title="Default controls"></button>
         <button class="pages-dot" type="button" data-page-index="1" aria-label="Frequency range" title="Frequency range"></button>
         <button class="pages-dot" type="button" data-page-index="2" aria-label="Background color" title="Background color"></button>
+        <button class="pages-dot" type="button" data-page-index="3" aria-label="Background image" title="Background image"></button>
       </div>
     </div>
 
@@ -1236,12 +1415,12 @@ function getIconSet()      { return ICON_SETS[currentSetId] || ICON_SETS[1]; }
 function getChannelIcon(i) { return getIconSet().icons[i]; }
 
 const CHANNELS = [
-  { label: "Kick (909)",     range: "40 – 120 Hz",      glowColor: "#7F77DD", barColor: "#AFA9EC" },
-  { label: "Kick Punch",     range: "120 – 350 Hz",     glowColor: "#D85A30", barColor: "#F0997B" },
-  { label: "Snare / Clap",   range: "350 – 1,200 Hz",   glowColor: "#1D9E75", barColor: "#5DCAA5" },
-  { label: "Mids",           range: "1.2 – 3.5 kHz",    glowColor: "#378ADD", barColor: "#85B7EB" },
-  { label: "Hi-Hat Body",    range: "3.5 – 8 kHz",      glowColor: "#EF9F27", barColor: "#FAC775" },
-  { label: "Hi-Hat Air",     range: "8 – 18 kHz",       glowColor: "#D4537E", barColor: "#ED93B1" }
+  { label: "Kick (909)",     range: "40 – 120 Hz",      barColor: "#AFA9EC" },
+  { label: "Kick Punch",     range: "120 – 350 Hz",     barColor: "#F0997B" },
+  { label: "Snare / Clap",   range: "350 – 1,200 Hz",   barColor: "#5DCAA5" },
+  { label: "Mids",           range: "1.2 – 3.5 kHz",    barColor: "#85B7EB" },
+  { label: "Hi-Hat Body",    range: "3.5 – 8 kHz",      barColor: "#FAC775" },
+  { label: "Hi-Hat Air",     range: "8 – 18 kHz",       barColor: "#ED93B1" }
 ];
 
 const freqBands = [
@@ -1249,6 +1428,100 @@ const freqBands = [
 ];
 
 let analyser, animId, running = false;
+let micStream = null, micCtx = null;   // kept so Stop can release the device
+
+// Icon opacity range: silence → ICON_ALPHA_MIN, full signal → 1. Kept high
+// so the graphics stay present on stage; loudness only adds the last bit of
+// brightness. (Was 0.35, which made quiet passages look washed out.)
+const ICON_ALPHA_MIN = 0.7;
+
+// ──────────────────────────────────────────────────────────────────────
+// Line mode — dynamics expander for internal routing (BlackHole etc.).
+// Mastered music arrives heavily compressed: each band hovers in a narrow
+// level window, so icons barely move. Per channel we track a floating
+// floor and ceiling of its recent level (fast to follow new extremes,
+// slow to relax), stretch the current value across that span, then apply
+// a contrast curve so small wobbles stay calm and hits pop.
+//   • LINE_MIN_SPAN keeps tiny noise from being blown up to full swings
+//   • a channel whose ceiling is near zero stays silent (gate)
+// Mic input never goes through this — it has natural dynamics already.
+// ──────────────────────────────────────────────────────────────────────
+const LINE_DEVICE_RE = /blackhole|loopback|vb-?cable|soundflower|virtual/i;
+const LINE_FOLLOW_FAST = 3;     // 1/s — how fast floor/ceiling chase new extremes
+                                // (slow enough that a hit can overshoot the
+                                // ceiling and register as a full-height peak)
+const LINE_FOLLOW_SLOW = 0.35;  // 1/s — how fast they relax back (~3 s)
+const LINE_MIN_SPAN    = 0.2;   // minimum floor→ceiling span (0–1 scale)
+const LINE_CONTRAST    = 1.4;   // >1 = calmer lows, punchier peaks
+const LINE_OUT_GAIN    = 1.6;   // headroom stretch so strong hits reach the top
+const LINE_GATE        = 0.06;  // ceiling below this → channel treated as silent
+// Output envelope — calms the result without adding latency: rises are
+// passed through instantly so hits land on the beat; only the fall is
+// smoothed so icons glide back instead of jittering frame to frame.
+const LINE_RELEASE     = 3.5;   // 1/s fall rate (~285 ms)
+const lineOut   = new Float32Array(6);
+let lineMode = false;
+const lineFloor = new Float32Array(6);
+const lineCeil  = new Float32Array(6);
+
+// Spectral focus — each channel band is split into LINE_SUBBANDS narrow
+// log-spaced slices. For every slice we keep a running mean and variance
+// (~2 s memory). The channel level is the variance-weighted average of
+// its slices: a slice carrying hits (kick, snare, hats) dominates, a flat
+// sustained pad hardly counts. Weighting is soft, so nothing jumps when
+// the music changes. Reads the RAW spectrum: no boost, no clipping —
+// the expander normalises per channel anyway, and the boost would push
+// mids past 255 where every movement gets flattened.
+const LINE_SUBBANDS   = 4;
+const LINE_STATS_RATE = 0.5;    // 1/s — memory of the per-slice statistics
+const lineSubMean = new Float32Array(6 * LINE_SUBBANDS);
+const lineSubVar  = new Float32Array(6 * LINE_SUBBANDS);
+
+function focusedLineLevel(ch, lo, hi, sr, fft, dt) {
+  const a = Math.min(1, dt * LINE_STATS_RATE);
+  const logLo = Math.log10(lo);
+  const step = (Math.log10(hi) - logLo) / LINE_SUBBANDS;
+  const maxBin = rawFreqBuf.length - 1;
+  let wSum = 0, vSum = 0;
+  for (let k = 0; k < LINE_SUBBANDS; k++) {
+    const fLo = Math.pow(10, logLo + k * step);
+    const fHi = Math.pow(10, logLo + (k + 1) * step);
+    const bLo = Math.min(maxBin, freqToIndex(fLo, sr, fft));
+    const bHi = Math.max(bLo, Math.min(maxBin, freqToIndex(fHi, sr, fft)));
+    let sum = 0;
+    for (let b = bLo; b <= bHi; b++) sum += rawFreqBuf[b];
+    const v = sum / (bHi - bLo + 1) / 255;
+    const idx = ch * LINE_SUBBANDS + k;
+    lineSubMean[idx] += (v - lineSubMean[idx]) * a;
+    const d = v - lineSubMean[idx];
+    lineSubVar[idx] += (d * d - lineSubVar[idx]) * a;
+    const w = lineSubVar[idx] + 1e-5;
+    wSum += w;
+    vSum += w * v;
+  }
+  return vSum / wSum;
+}
+
+function resetLineDynamics() {
+  lineFloor.fill(0.5);
+  lineCeil.fill(0.5);
+  lineOut.fill(0);
+  lineSubMean.fill(0.5);
+  lineSubVar.fill(0);
+}
+function expandDynamics(i, s, dt) {
+  const fast = Math.min(1, dt * LINE_FOLLOW_FAST);
+  const slow = Math.min(1, dt * LINE_FOLLOW_SLOW);
+  lineFloor[i] += (s - lineFloor[i]) * (s < lineFloor[i] ? fast : slow);
+  lineCeil[i]  += (s - lineCeil[i])  * (s > lineCeil[i]  ? fast : slow);
+  const span = Math.max(lineCeil[i] - lineFloor[i], LINE_MIN_SPAN);
+  const n = Math.max(0, Math.min(1, (s - lineFloor[i]) / span * LINE_OUT_GAIN));
+  const gate = Math.min(1, lineCeil[i] / LINE_GATE);
+  const target = Math.pow(n, LINE_CONTRAST) * gate;
+  if (target >= lineOut[i]) lineOut[i] = target;                       // instant attack
+  else lineOut[i] += (target - lineOut[i]) * Math.min(1, dt * LINE_RELEASE);
+  return lineOut[i];
+}
 let sensitivity = 50;
 let scaleStrength = 50;
 let rotationSpeed = 0;
@@ -1258,7 +1531,7 @@ let sineStrength = 0;
 // per-channel accumulated rotation angles (degrees)
 const rotAngles = [0, 0, 0, 0, 0, 0];
 let lastFrameTime = 0;
-const iconEls = [], barEls = [], dbEls = [], glowEls = [], channelEls = [];
+const iconEls = [], barEls = [], dbEls = [], channelEls = [];
 
 const grid = document.getElementById('grid');
 
@@ -1266,7 +1539,6 @@ CHANNELS.forEach((ch, i) => {
   const div = document.createElement('div');
   div.className = 'channel';
   div.innerHTML = `
-    <div class="channel-glow" id="glow${i}" style="background:${ch.glowColor}"></div>
     <div class="channel-svg-wrap" id="wrap${i}">
       <img id="icon${i}" class="channel-icon" src="${getChannelIcon(i)}" alt="" draggable="false">
     </div>
@@ -1281,7 +1553,6 @@ CHANNELS.forEach((ch, i) => {
   iconEls.push(document.getElementById(`icon${i}`));
   barEls.push(document.getElementById(`bar${i}`));
   dbEls.push(document.getElementById(`db${i}`));
-  glowEls.push(document.getElementById(`glow${i}`));
   channelEls.push(div);
 });
 
@@ -1325,12 +1596,11 @@ eqToggleEls.forEach((toggle, i) => {
 
     if (channelEnabled[i]) {
       // Show again — baseline opacity; the animation loop will take over from here
-      iconEls[i].style.opacity = '0.35';
+      iconEls[i].style.opacity = String(ICON_ALPHA_MIN);
     } else {
       // Hide completely + reset to base pose so it doesn't re-appear mid-flight
       iconEls[i].style.opacity = '0';
       iconEls[i].style.transform = 'translate(0px,0px) scale(1) rotate(0deg)';
-      glowEls[i].style.opacity = '0';
       eqBarEls[i].style.height = '0%';
       eqPeakEls[i].style.bottom = '0%';
       peakHold[i] = 0;
@@ -1410,7 +1680,40 @@ async function processSvgFile(file) {
   const clean = sanitizeSvgString(text);
   // Base64 encode for a self-contained data URL (handles non-ASCII safely)
   const b64 = btoa(unescape(encodeURIComponent(clean)));
-  return { kind: 'svg', dataUrl: `data:image/svg+xml;base64,${b64}` };
+  const size = svgDesignSize(clean);   // { w, h } in px as authored, or null
+  return { kind: 'svg', dataUrl: `data:image/svg+xml;base64,${b64}`, size };
+}
+
+// Read the size an SVG was designed at: its width/height attributes (px or
+// unitless), falling back to the viewBox. Percent or other relative units
+// carry no absolute size, so they fall back to the viewBox too. Returns null
+// if nothing usable is found — the icon then uses the default 96 px box.
+function svgDesignSize(svgString) {
+  try {
+    const root = new DOMParser().parseFromString(svgString, 'image/svg+xml').documentElement;
+    const abs = (v) => {
+      const m = /^\s*([\d.]+)\s*(px)?\s*$/i.exec(v || '');
+      return m ? parseFloat(m[1]) : NaN;
+    };
+    let w = abs(root.getAttribute('width'));
+    let h = abs(root.getAttribute('height'));
+    const vb = (root.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    const vbOk = vb.length === 4 && vb[2] > 0 && vb[3] > 0;
+    if (!(w > 0) && !(h > 0) && vbOk) { w = vb[2]; h = vb[3]; }
+    else if (w > 0 && !(h > 0) && vbOk) h = w * vb[3] / vb[2];
+    else if (h > 0 && !(w > 0) && vbOk) w = h * vb[2] / vb[3];
+    return (w > 0 && h > 0) ? { w, h } : null;
+  } catch (_) { return null; }
+}
+
+// Box size for channel i: imported SVGs render at their designed size
+// (longer side), so a 4000 × 2 px hairline stays a hairline instead of being
+// squeezed into 96 px. Defaults and bitmaps keep the standard 96 px box.
+const DEFAULT_ICON_BOX = 96;
+function channelNativeSize(i) {
+  const c = customIcons[i];
+  if (c && c.kind === 'svg' && c.size) return Math.max(c.size.w, c.size.h);
+  return 0;
 }
 
 // Convert a bitmap file (PNG/JPG) to a data URL, resized if necessary.
@@ -1460,6 +1763,13 @@ function applyChannelIconDom(i) {
   if (!host) return;
   const dataUrl = customIcons[i] ? customIcons[i].dataUrl : getChannelIcon(i);
   host.src = dataUrl;
+  // Box the icon is fitted into: designed size for imported SVGs, else 96 px
+  const box = channelNativeSize(i) || DEFAULT_ICON_BOX;
+  const wrap = host.parentElement;
+  if (wrap) {
+    wrap.style.width  = box + 'px';
+    wrap.style.height = box + 'px';
+  }
 }
 
 // ── Async asset pipeline (iconImages + union eraser) ──────────────────────
@@ -1629,7 +1939,12 @@ function animate(now) {
     const s = Math.min(1, avg / 200);
 
     // effS: raw signal amplified by global sensitivity
-    const effS = Math.min(1, s * (sensitivity / 100));
+    // Line mode (internal routing): stretch this channel's own recent
+    // range to full motion; mic input passes through unchanged.
+    const sAnim = lineMode
+      ? expandDynamics(i, focusedLineLevel(i, lo, hi, sr, fft, dt), dt)
+      : s;
+    const effS = Math.min(1, sAnim * (sensitivity / 100));
 
     // SIZE: scaleStrength controls max growth (0=none, 100=20x)
     const maxScale = 1 + Math.pow(scaleStrength / 100, 1.8) * 19;
@@ -1640,22 +1955,28 @@ function animate(now) {
     const degsPerSec = maxDegsPerSec * Math.pow(effS, 0.6);
     rotAngles[i] = (rotAngles[i] + degsPerSec * dt) % 360;
     // FLUGKURVE: kombinierte Sinus/Cosinus-Bewegung in X und Y
-    //  - sineStrength steuert die Frequenz (0 = keine Bewegung)
+    //  - sineStrength steuert die Frequenz (0 = gerade Y-Bewegung, siehe unten)
     //  - xStrength → X-Amplitude (sin), yStrength → Y-Amplitude (cos)
     //  - Each channel has its own phase offset + slight Y-frequency factor,
     //    sodass nicht alle 6 Icons dieselbe Ellipse tracen, sondern jeder seine
     //    own Lissajous-style flight path.
+    //  - Sinus = 0: no oscillation — each icon moves straight along the Y
+    //    axis, displacement = signal × Y amount. Channels alternate direction
+    //    (1/3/5 up, 2/4/6 down) so the screen fills evenly above and below
+    //    the baseline. Quiet → back to the baseline.
     let tx = 0, ty = 0;
-    if (sineStrength > 0) {
+    const maxOffsetY = 700;
+    const yFactor = Math.pow(yStrength / 100, 1.6);
+    const ampY = effS * yFactor * maxOffsetY;
+    if (sineStrength === 0) {
+      ty = (i % 2 === 0) ? -ampY : ampY;
+    } else {
       // X-amplitude is viewport-relative → at high X-Spread icons can
       // links/rechts aus dem Sichtbereich fliegen (auch bei großen Monitoren).
       const maxOffsetX = Math.max(900, window.innerWidth * 0.75);
-      const maxOffsetY = 700;
       const freq = Math.pow(sineStrength / 100, 1.4) * 1.5; // 0–1.5 Hz
       const xFactor = Math.pow(xStrength / 100, 1.6);
-      const yFactor = Math.pow(yStrength / 100, 1.6);
       const ampX = effS * xFactor * maxOffsetX;
-      const ampY = effS * yFactor * maxOffsetY;
       const t = (now || 0) / 1000;
       const omega = freq * 2 * Math.PI;
       const phase = i * (Math.PI / 3);          // 6 Kanäle gleichmäßig über den Zyklus
@@ -1679,21 +2000,23 @@ function animate(now) {
         i,
         cx: wrapRect.left + wrapRect.width / 2 + tx,
         cy: wrapRect.top + wrapRect.height / 2 + ty,
-        size: 80 * scale,
+        // Trail stamp size: designed size for imported SVGs (matches the DOM
+        // icon); defaults keep their established 80 px trail stamp.
+        size: (channelNativeSize(i) || 80) * scale,
         rot: rotAngles[i],
-        alpha: 0.35 + opacityS * 0.65   // matches DOM icon opacity formula
+        alpha: ICON_ALPHA_MIN + opacityS * (1 - ICON_ALPHA_MIN)   // matches DOM icon opacity
       });
     }
 
-    // DOM icon opacity uses the same saturated curve; glow + EQ bar stay on raw effS
-    iconEls[i].style.opacity = (0.35 + opacityS * 0.65).toFixed(3);
-    glowEls[i].style.opacity = (effS * 0.4).toFixed(3);
+    // DOM icon opacity uses the same saturated curve; EQ bar stays on raw effS
+    iconEls[i].style.opacity = (ICON_ALPHA_MIN + opacityS * (1 - ICON_ALPHA_MIN)).toFixed(3);
     if (effS > 0.05) channelEls[i].classList.add('lit');
     else channelEls[i].classList.remove('lit');
     barEls[i].style.width = Math.round(effS * 100) + '%';
 
     // EQ: use raw s for true signal level (unaffected by sensitivity)
-    const eqPct = Math.round(s * 100);
+    // Line mode: show what actually drives the icons; mic: true signal level
+    const eqPct = Math.round((lineMode ? sAnim : s) * 100);
     eqBarEls[i].style.height = eqPct + '%';
     // Peak hold: rise instantly, fall slowly
     if (eqPct >= peakHold[i]) {
@@ -1727,10 +2050,14 @@ function animate(now) {
     //   erasure follows the visible alpha exactly — no rectangular holes for
     //   PNGs with transparent corners.
     if (trailsMode === 1) {
+      // Fade per 60 fps frame (0.015 ≈ trails halve in ~0.75 s). Scaled by
+      // the real frame time so 120 Hz ProMotion screens fade at the same
+      // speed instead of twice as fast.
       const TRAILS1_FADE_RATE = 0.015;
+      const fade = 1 - Math.pow(1 - TRAILS1_FADE_RATE, dt * 60);
       trailsCtx.save();
       trailsCtx.globalCompositeOperation = 'destination-out';
-      trailsCtx.fillStyle = `rgba(0, 0, 0, ${TRAILS1_FADE_RATE})`;
+      trailsCtx.fillStyle = `rgba(0, 0, 0, ${fade.toFixed(4)})`;
       trailsCtx.fillRect(0, 0, trailsCanvas.width, trailsCanvas.height);
       trailsCtx.restore();
     } else if (trailsMode === 2) {
@@ -1752,7 +2079,7 @@ function animate(now) {
       }
     }
     // Pass 2: draw the icon white, with the same alpha as the DOM icon
-    // (0.35 baseline → 1.0 at full signal). Each trail copy persists at the alpha
+    // (ICON_ALPHA_MIN baseline → 1.0 at full signal). Each trail copy persists at the alpha
     // it was drawn with, so faint trails appear during quiet passages.
     for (const d of trailDraws) {
       trailsCtx.save();
@@ -1954,23 +2281,15 @@ requestAnimationFrame(applyLayoutSpread);
 window.addEventListener('load', applyLayoutSpread);
 window.addEventListener('resize', applyLayoutSpread);
 
-// Sine slider (controls Y oscillation frequency; gates the Y slider)
+// Sine slider (controls oscillation frequency; 0 = straight Y movement)
 const sineSlider = document.getElementById('sineSlider');
 const sineValueEl = document.getElementById('sineValue');
 function updateSineTrack(val) { sineSlider.style.setProperty('--pct', val + '%'); }
-
-function updateYDisabled() {
-  const off = sineStrength === 0;
-  ySlider.disabled = off;
-  const wrap = ySlider.closest('.vslider');
-  if (wrap) wrap.classList.toggle('disabled', off);
-}
 
 sineSlider.addEventListener('input', () => {
   sineStrength = parseInt(sineSlider.value, 10);
   sineValueEl.textContent = sineStrength;
   updateSineTrack(sineStrength);
-  updateYDisabled();
 });
 updateSineTrack(0);
 
@@ -1984,7 +2303,6 @@ ySlider.addEventListener('input', () => {
   updateYTrack(yStrength);
 });
 updateYTrack(50);
-updateYDisabled();
 
 
 // Layout toggle
@@ -1996,6 +2314,7 @@ function selectTrailsMode(mode) {
   if (trailsMode === mode) return;
   trailsMode = mode;
   document.body.classList.toggle('trails-on', mode !== null);
+  document.body.classList.toggle('trails-mode-1', mode === 1);
   document.querySelectorAll('[data-trails-mode]').forEach(btn => {
     const btnMode = parseInt(btn.dataset.trailsMode, 10);
     btn.classList.toggle('active', mode !== null && btnMode === mode);
@@ -2430,11 +2749,10 @@ function resetUI() {
   eqPeakEls.forEach(el => el.style.bottom = '0%');
   iconEls.forEach((el, i) => {
     el.style.transform = 'translate(0px, 0px) scale(1) rotate(0deg)';
-    el.style.opacity = channelEnabled[i] ? '0.35' : '0';
+    el.style.opacity = channelEnabled[i] ? String(ICON_ALPHA_MIN) : '0';
   });
   barEls.forEach(b => b.style.width = '0%');
   dbEls.forEach(d => d.textContent = '– dB');
-  glowEls.forEach(g => g.style.opacity = '0');
   channelEls.forEach(c => c.classList.remove('lit'));
 }
 
@@ -2471,22 +2789,52 @@ btn.addEventListener('click', async () => {
     setMicState('Start microphone', false);
     btn.title = '';
     setFreqrangeMicActive(false);
+    // Release the input device and audio context so the next start picks
+    // up a freshly chosen device (and the browser's mic indicator turns off).
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (micCtx) { micCtx.close().catch(() => {}); micCtx = null; }
     resetUI();
     return;
   }
   try {
     setMicState('Requesting access…', false);
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    // All browser voice processing OFF. Echo cancellation in particular
+    // removes anything identical to what the speakers are playing — with a
+    // loopback device like BlackHole that is the ENTIRE signal, so the
+    // analyser would receive silence. Noise suppression and auto gain would
+    // also flatten music dynamics. Raw input is what a visualiser needs.
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        latency: 0                     // ask for the smallest input buffer
+      },
+      video: false
+    });
+    micStream = stream;
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    micCtx = ctx;
+    if (ctx.state === 'suspended') await ctx.resume();
     const src = ctx.createMediaStreamSource(stream);
     analyser = ctx.createAnalyser();
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.8;
     src.connect(analyser);
     buildBoostCurve();   // one-off init — depends on sample rate + FFT size
+    resetAutoLevel();    // every session starts from the default dB window
     running = true;
     setMicState('Stop microphone', true);
-    btn.title = '';
+    // Show which input the browser actually picked (hover the button)
+    const track = stream.getAudioTracks()[0];
+    const label = track && track.label ? track.label : '';
+    lineMode = LINE_DEVICE_RE.test(label);
+    resetLineDynamics();
+    // Internal routing: almost no analyser smoothing. The analyser smooths
+    // rises and falls alike, which adds ~90 ms lag at 0.65; the line-mode
+    // envelope already calms the falls, so rises can come through raw.
+    analyser.smoothingTimeConstant = lineMode ? 0.2 : 0.8;
+    btn.title = label ? 'Input: ' + label + (lineMode ? ' · line mode' : '') : '';
     setFreqrangeMicActive(true);
     animate();
   } catch (e) {
@@ -2562,12 +2910,72 @@ function buildBoostCurve() {
 
 // Read the current FFT, apply the boost curve, store in compensatedSpectrum.
 // Call once per frame before anything else that touches the audio data.
+// ──────────────────────────────────────────────────────────────────────
+// Automatic level control. The analyser maps each bin's level into 0–255
+// across a fixed dB window (browser default −100 … −30 dB). A quiet mic
+// sits comfortably inside it; a hot line-level signal (BlackHole, audio
+// interface) lands above the top and every bin pins at 255. This slides
+// the window to fit the actual input:
+//   • peaks hitting the ceiling → window moves UP fast (attack)
+//   • peaks well below target   → window moves DOWN slowly (release)
+//   • near-silence              → hold (don't pull up the noise floor)
+// It's one global window, so the balance between channels is preserved.
+// ──────────────────────────────────────────────────────────────────────
+const AGC_RANGE_DB    = 70;     // width of the window (max − min)
+const AGC_MAX_DB_LO   = -55;    // most sensitive allowed ceiling
+const AGC_MAX_DB_HI   = 0;      // least sensitive allowed ceiling
+const AGC_START_DB    = -30;    // browser default — starting point
+const AGC_ATTACK_DBS  = 24;     // dB/s upward when clipping
+const AGC_RELEASE_DBS = 4;      // dB/s downward when too quiet
+const AGC_CLIP_BYTE   = 250;    // peak ≥ this → treat as clipping
+const AGC_LOW_BYTE    = 200;    // peak <  this → room to come down
+const AGC_GATE_BYTE   = 60;     // peak <  this → silence, hold
+let agcMaxDb = AGC_START_DB;
+let agcLastT = 0;
+
+function resetAutoLevel() {
+  agcMaxDb = AGC_START_DB;
+  agcLastT = 0;
+  if (analyser) applyAutoLevelWindow();
+}
+function applyAutoLevelWindow() {
+  // Order matters: min must stay below max at every step or the browser throws
+  const newMin = agcMaxDb - AGC_RANGE_DB;
+  if (agcMaxDb > analyser.maxDecibels) {
+    analyser.maxDecibels = agcMaxDb;
+    analyser.minDecibels = newMin;
+  } else {
+    analyser.minDecibels = newMin;
+    analyser.maxDecibels = agcMaxDb;
+  }
+}
+function updateAutoLevel() {
+  const now = performance.now();
+  const dt = agcLastT ? Math.min(0.1, (now - agcLastT) / 1000) : 0;
+  agcLastT = now;
+  if (!dt) return;
+  // Peak over the musically relevant bins (≈ 20 Hz – 16 kHz)
+  const nyquist = analyser.context.sampleRate / 2;
+  const n = rawFreqBuf.length;
+  const lo = Math.max(1, Math.floor(20 / nyquist * n));
+  const hi = Math.min(n - 1, Math.ceil(16000 / nyquist * n));
+  let peak = 0;
+  for (let i = lo; i <= hi; i++) if (rawFreqBuf[i] > peak) peak = rawFreqBuf[i];
+
+  let next = agcMaxDb;
+  if (peak >= AGC_CLIP_BYTE)                         next += AGC_ATTACK_DBS * dt;
+  else if (peak >= AGC_GATE_BYTE && peak < AGC_LOW_BYTE) next -= AGC_RELEASE_DBS * dt;
+  next = Math.max(AGC_MAX_DB_LO, Math.min(AGC_MAX_DB_HI, next));
+  if (next !== agcMaxDb) { agcMaxDb = next; applyAutoLevelWindow(); }
+}
+
 function captureCompensatedSpectrum() {
   if (!analyser) return;
   if (!boostCurve || boostCurve.length !== analyser.frequencyBinCount) {
     buildBoostCurve();
   }
   analyser.getByteFrequencyData(rawFreqBuf);
+  updateAutoLevel();   // adjusts the window for the NEXT frame
   for (let i = 0; i < rawFreqBuf.length; i++) {
     const boosted = rawFreqBuf[i] * boostCurve[i];
     compensatedSpectrum[i] = boosted > 255 ? 255 : boosted;
@@ -2823,27 +3231,26 @@ window.addEventListener('load', syncFreqrangeLayout);
 window.addEventListener('resize', syncFreqrangeLayout);
 
 // ──────────────────────────────────────────────────────────────────────
-// Swipeable pages — the middle section of the control panel. Native
-// scroll-snap handles the touch gesture; pagination dots mirror and drive
-// the position.
+// Pages — switched only via the paging buttons (no swipe, so slider touch
+// drags never flip pages). Hidden pages are display: none, so their
+// size-dependent layout (spectrum canvas, triangle handles, colour-picker
+// thumbs) is re-synced right after a page becomes visible.
 // ──────────────────────────────────────────────────────────────────────
-const pagesScroll = document.getElementById('pagesScroll');
+const pageEls = Array.from(document.querySelectorAll('.pages-scroll .page'));
 const pagesDots = Array.from(document.querySelectorAll('.pages-dot'));
 
-function syncPagesDots() {
-  if (!pagesScroll || pagesScroll.clientWidth === 0) return;
-  const idx = Math.round(pagesScroll.scrollLeft / pagesScroll.clientWidth);
-  pagesDots.forEach((d, i) => d.classList.toggle('active', i === idx));
-}
-if (pagesScroll) {
-  pagesScroll.addEventListener('scroll', syncPagesDots);
-  window.addEventListener('resize', syncPagesDots);
+function showPage(idx) {
+  pageEls.forEach((p, i) => p.classList.toggle('active', i === idx));
+  pagesDots.forEach((d, i) => {
+    const on = i === idx;
+    d.classList.toggle('active', on);
+    d.setAttribute('aria-current', on ? 'true' : 'false');
+  });
+  syncFreqrangeLayout();
+  applyBgColor();
 }
 pagesDots.forEach((dot, i) => {
-  dot.addEventListener('click', () => {
-    if (!pagesScroll) return;
-    pagesScroll.scrollTo({ left: i * pagesScroll.clientWidth, behavior: 'smooth' });
-  });
+  dot.addEventListener('click', () => showPage(i));
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -2968,6 +3375,170 @@ applyBgColor();
 requestAnimationFrame(applyBgColor);
 window.addEventListener('load', applyBgColor);
 window.addEventListener('resize', applyBgColor);
+
+// ──────────────────────────────────────────────────────────────────────
+// Background image — user picks any image file; it's shown on the stage
+// above the stage colour. Two size modes:
+//   • Fill     — covers the viewport edge to edge (like CSS cover)
+//   • Original — the image's natural size, centred
+// The Scale slider multiplies either base size (25 % – 400 %, log scale,
+// 100 % in the middle). Switching mode resets Scale to 100 % so each mode
+// starts from its natural state. Sizes are computed in px from the image's
+// natural dimensions and re-applied on viewport resize. Kept in memory as
+// an object URL for the session; old URLs are revoked on replace/remove.
+// ──────────────────────────────────────────────────────────────────────
+(function () {
+  const stageImage = document.getElementById('stageImage');
+  const page    = document.getElementById('bgimage');
+  const box     = document.getElementById('bgimageBox');
+  const input   = document.getElementById('bgimageInput');
+  const replace = document.getElementById('bgimageReplace');
+  const remove  = document.getElementById('bgimageRemove');
+  const scaleWrap  = document.getElementById('bgimageScale');
+  const scaleThumb = document.getElementById('bgimageScaleThumb');
+  const scaleValue = document.getElementById('bgimageScaleValue');
+  const modeBtns = Array.from(document.querySelectorAll('[data-bgimage-mode]'));
+  if (!stageImage || !box || !input) return;
+
+  const SCALE_MIN = 25, SCALE_MAX = 400;
+  const LOG_MIN = Math.log(SCALE_MIN), LOG_MAX = Math.log(SCALE_MAX);
+  let currentUrl = null;
+  let natW = 0, natH = 0;
+  let mode = 'fill';
+  let scalePct = 100;
+
+  const posToScale = (pos) => Math.exp(LOG_MIN + pos * (LOG_MAX - LOG_MIN));
+  const scaleToPos = (pct) => (Math.log(pct) - LOG_MIN) / (LOG_MAX - LOG_MIN);
+
+  function applyStageSize() {
+    if (!currentUrl || !natW || !natH) return;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const base = mode === 'fill' ? Math.max(vw / natW, vh / natH) : 1;
+    const k = base * scalePct / 100;
+    stageImage.style.backgroundSize =
+      Math.round(natW * k) + 'px ' + Math.round(natH * k) + 'px';
+  }
+  function renderScale() {
+    const w = scaleWrap.clientWidth;
+    if (w > 0) scaleThumb.style.left = (scaleToPos(scalePct) * w) + 'px';
+    const rounded = Math.round(scalePct);
+    scaleValue.textContent = rounded + ' %';
+    scaleWrap.setAttribute('aria-valuenow', rounded);
+  }
+  function setScale(pct) {
+    scalePct = Math.max(SCALE_MIN, Math.min(SCALE_MAX, pct));
+    // Snap to 100 % near the middle so the natural size is easy to hit
+    if (Math.abs(scalePct - 100) < 4) scalePct = 100;
+    renderScale();
+    applyStageSize();
+  }
+  function setMode(m) {
+    mode = m;
+    modeBtns.forEach(b => {
+      const on = b.dataset.bgimageMode === m;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    setScale(100);
+  }
+
+  function setImage(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    const url = URL.createObjectURL(file);
+    // Only commit once the browser can actually decode it
+    const probe = new Image();
+    probe.onload = () => {
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      currentUrl = url;
+      natW = probe.naturalWidth;
+      natH = probe.naturalHeight;
+      const css = 'url("' + url + '")';
+      stageImage.style.backgroundImage = css;
+      box.style.backgroundImage = css;
+      stageImage.classList.add('has-image');
+      box.classList.add('has-image');
+      page.classList.add('has-image');
+      box.setAttribute('aria-label', 'Background image set — choose another');
+      setMode('fill');                 // fresh image → full-bleed at 100 %
+    };
+    probe.onerror = () => {
+      URL.revokeObjectURL(url);
+      alert('This image format is not supported by your browser.');
+    };
+    probe.src = url;
+  }
+  function clearImage() {
+    if (currentUrl) URL.revokeObjectURL(currentUrl);
+    currentUrl = null;
+    natW = natH = 0;
+    stageImage.style.backgroundImage = '';
+    stageImage.style.backgroundSize = '';
+    box.style.backgroundImage = '';
+    stageImage.classList.remove('has-image');
+    box.classList.remove('has-image');
+    page.classList.remove('has-image');
+    box.setAttribute('aria-label', 'Choose background image');
+    setMode('fill');
+  }
+  function openPicker() { input.value = ''; input.click(); }
+
+  box.addEventListener('click', (e) => {
+    if (e.target === remove) return;
+    openPicker();
+  });
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
+  });
+  replace.addEventListener('click', (e) => { e.stopPropagation(); openPicker(); });
+  remove.addEventListener('click', (e) => { e.stopPropagation(); clearImage(); });
+  input.addEventListener('change', () => setImage(input.files && input.files[0]));
+
+  // Desktop: drop a file straight onto the preview box
+  box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('dragover'); });
+  box.addEventListener('dragleave', () => box.classList.remove('dragover'));
+  box.addEventListener('drop', (e) => {
+    e.preventDefault();
+    box.classList.remove('dragover');
+    setImage(e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+
+  // Mode toggle
+  modeBtns.forEach(b => b.addEventListener('click', () => setMode(b.dataset.bgimageMode)));
+
+  // Scale slider — same pointer plumbing as the colour picker
+  setupBgColorArea(scaleWrap, (e) => {
+    const rect = scaleWrap.getBoundingClientRect();
+    const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    setScale(posToScale(pos));
+  });
+  scaleWrap.addEventListener('dblclick', () => setScale(100));   // quick reset
+  scaleWrap.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 0.1 : 0.02;
+    let pos = scaleToPos(scalePct);
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp')   pos += step;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') pos -= step;
+    else if (e.key === 'Home') pos = 0;
+    else if (e.key === 'End')  pos = 1;
+    else return;
+    e.preventDefault();
+    setScale(posToScale(Math.max(0, Math.min(1, pos))));
+  });
+
+  window.addEventListener('resize', () => { renderScale(); applyStageSize(); });
+  // The page may be hidden at load (clientWidth 0) — re-render the thumb
+  // whenever its page becomes visible.
+  pagesDots.forEach(d => d.addEventListener('click', () => requestAnimationFrame(renderScale)));
+  renderScale();
+})();
+
+// Belt and braces for iOS: cancel selection and long-press context menu
+// inside the control panel, in case CSS alone doesn't stop them.
+(function () {
+  const frame = document.querySelector('.control-frame');
+  if (!frame) return;
+  frame.addEventListener('selectstart', e => e.preventDefault());
+  frame.addEventListener('contextmenu', e => e.preventDefault());
+})();
 
 // Set initial opacity
 resetUI();
