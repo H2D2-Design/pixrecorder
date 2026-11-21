@@ -2045,10 +2045,14 @@ function animate(now) {
     //   erasure follows the visible alpha exactly — no rectangular holes for
     //   PNGs with transparent corners.
     if (trailsMode === 1) {
+      // Fade per 60 fps frame (0.015 ≈ trails halve in ~0.75 s). Scaled by
+      // the real frame time so 120 Hz ProMotion screens fade at the same
+      // speed instead of twice as fast.
       const TRAILS1_FADE_RATE = 0.015;
+      const fade = 1 - Math.pow(1 - TRAILS1_FADE_RATE, dt * 60);
       trailsCtx.save();
       trailsCtx.globalCompositeOperation = 'destination-out';
-      trailsCtx.fillStyle = `rgba(0, 0, 0, ${TRAILS1_FADE_RATE})`;
+      trailsCtx.fillStyle = `rgba(0, 0, 0, ${fade.toFixed(4)})`;
       trailsCtx.fillRect(0, 0, trailsCanvas.width, trailsCanvas.height);
       trailsCtx.restore();
     } else if (trailsMode === 2) {
