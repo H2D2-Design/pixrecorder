@@ -84,6 +84,20 @@
 
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
 
+  /* ── Stage background image — full-bleed, borderless, always covering the
+     viewport. Sits above the stage colour (body background) and below the
+     logo, the trails canvas and the icons. ── */
+  .stage-image {
+    position: fixed; inset: 0;
+    z-index: 0;
+    background-position: center;
+    background-size: cover;
+    background-repeat: no-repeat;
+    pointer-events: none;
+    display: none;
+  }
+  .stage-image.has-image { display: block; }
+
   /* ── Brand logo — fixed top-right of the stage, subtle background presence ── */
   .brand {
     position: fixed;
@@ -593,6 +607,64 @@
 
   /* "No audio input" overlay — shown whenever the mic isn't running.
      Replaces the spectrum, handles, and pill (via no-signal class). */
+  /* ────────────────────────────────────────────────────────────────────
+     Background image page — same rhythm as the frequency page: an 82 px
+     preview box with the label below. Tap the box (or drop a file on it)
+     to choose an image; with an image set, Replace / Remove pills appear.
+     ──────────────────────────────────────────────────────────────────── */
+  .bgimage {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .bgimage-box {
+    position: relative;
+    width: 100%;
+    height: 82px;
+    border-radius: 4px;
+    background-color: var(--pr-grey-main);
+    background-position: center;
+    background-size: cover;
+    background-repeat: no-repeat;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  .bgimage-box.dragover { outline: 2px solid var(--pr-purple); outline-offset: -2px; }
+  .bgimage-box:focus-visible { outline: 2px solid var(--pr-purple); outline-offset: -2px; }
+  .bgimage-pill {
+    background: var(--pr-grey-dark);
+    color: white;
+    padding: 0 8px;
+    border-radius: 4px;
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 24px;
+    white-space: nowrap;
+    border: none;
+    cursor: pointer;
+  }
+  .bgimage-pill:hover { background: #26272e; }
+  .bgimage-box .bgimage-empty { pointer-events: none; }
+  .bgimage-box.has-image .bgimage-empty { display: none; }
+  .bgimage-actions {
+    position: absolute;
+    right: 4px; bottom: 4px;
+    display: none;
+    gap: 4px;
+  }
+  .bgimage-box.has-image .bgimage-actions { display: flex; }
+  .bgimage-label {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 24px;
+    color: var(--pr-grey-middle);
+  }
+
   .freqrange-no-input {
     position: absolute;
     top: 50%; left: 50%;
@@ -955,6 +1027,7 @@
 </head>
 <body>
 <!-- Brand logo — fixed top-right of the stage, subtle background presence -->
+<div class="stage-image" id="stageImage" aria-hidden="true"></div>
 <div class="brand" aria-label="PixRecorder">
 <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
 <g clip-path="url(#pr-brand-clip)">
@@ -1112,11 +1185,25 @@
             </div>
           </div>
         </div>
+        <div class="page" data-page="bgimage">
+          <div class="bgimage">
+            <div class="bgimage-box" id="bgimageBox" role="button" tabindex="0" aria-label="Choose background image">
+              <span class="bgimage-pill bgimage-empty">Choose image</span>
+              <div class="bgimage-actions">
+                <button type="button" class="bgimage-pill" id="bgimageReplace">Replace</button>
+                <button type="button" class="bgimage-pill" id="bgimageRemove">Remove</button>
+              </div>
+            </div>
+            <span class="bgimage-label">Background image</span>
+            <input type="file" id="bgimageInput" accept="image/*" hidden>
+          </div>
+        </div>
       </div>
       <div class="pages-dots" id="pagesDots">
         <button class="pages-dot active" type="button" data-page-index="0" aria-label="Default controls" title="Default controls"></button>
         <button class="pages-dot" type="button" data-page-index="1" aria-label="Frequency range" title="Frequency range"></button>
         <button class="pages-dot" type="button" data-page-index="2" aria-label="Background color" title="Background color"></button>
+        <button class="pages-dot" type="button" data-page-index="3" aria-label="Background image" title="Background image"></button>
       </div>
     </div>
 
@@ -2944,6 +3031,74 @@ applyBgColor();
 requestAnimationFrame(applyBgColor);
 window.addEventListener('load', applyBgColor);
 window.addEventListener('resize', applyBgColor);
+
+// ──────────────────────────────────────────────────────────────────────
+// Background image — user picks any image file; it's shown full-bleed on
+// the stage (background-size: cover) above the stage colour. Kept in
+// memory as an object URL for the session; the old URL is revoked on
+// replace/remove so memory doesn't pile up.
+// ──────────────────────────────────────────────────────────────────────
+(function () {
+  const stageImage = document.getElementById('stageImage');
+  const box     = document.getElementById('bgimageBox');
+  const input   = document.getElementById('bgimageInput');
+  const replace = document.getElementById('bgimageReplace');
+  const remove  = document.getElementById('bgimageRemove');
+  if (!stageImage || !box || !input) return;
+  let currentUrl = null;
+
+  function setImage(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    const url = URL.createObjectURL(file);
+    // Only commit once the browser can actually decode it
+    const probe = new Image();
+    probe.onload = () => {
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      currentUrl = url;
+      const css = 'url("' + url + '")';
+      stageImage.style.backgroundImage = css;
+      box.style.backgroundImage = css;
+      stageImage.classList.add('has-image');
+      box.classList.add('has-image');
+      box.setAttribute('aria-label', 'Background image set — choose another');
+    };
+    probe.onerror = () => {
+      URL.revokeObjectURL(url);
+      alert('This image format is not supported by your browser.');
+    };
+    probe.src = url;
+  }
+  function clearImage() {
+    if (currentUrl) URL.revokeObjectURL(currentUrl);
+    currentUrl = null;
+    stageImage.style.backgroundImage = '';
+    box.style.backgroundImage = '';
+    stageImage.classList.remove('has-image');
+    box.classList.remove('has-image');
+    box.setAttribute('aria-label', 'Choose background image');
+  }
+  function openPicker() { input.value = ''; input.click(); }
+
+  box.addEventListener('click', (e) => {
+    if (e.target === remove) return;
+    openPicker();
+  });
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
+  });
+  replace.addEventListener('click', (e) => { e.stopPropagation(); openPicker(); });
+  remove.addEventListener('click', (e) => { e.stopPropagation(); clearImage(); });
+  input.addEventListener('change', () => setImage(input.files && input.files[0]));
+
+  // Desktop: drop a file straight onto the preview box
+  box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('dragover'); });
+  box.addEventListener('dragleave', () => box.classList.remove('dragover'));
+  box.addEventListener('drop', (e) => {
+    e.preventDefault();
+    box.classList.remove('dragover');
+    setImage(e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+})();
 
 // Belt and braces for iOS: cancel selection and long-press context menu
 // inside the control panel, in case CSS alone doesn't stop them.
