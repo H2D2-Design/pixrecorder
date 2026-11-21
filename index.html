@@ -2654,6 +2654,7 @@ btn.addEventListener('click', async () => {
     analyser.smoothingTimeConstant = 0.8;
     src.connect(analyser);
     buildBoostCurve();   // one-off init — depends on sample rate + FFT size
+    resetAutoLevel();    // every session starts from the default dB window
     running = true;
     setMicState('Stop microphone', true);
     // Show which input the browser actually picked (hover the button)
@@ -2734,12 +2735,72 @@ function buildBoostCurve() {
 
 // Read the current FFT, apply the boost curve, store in compensatedSpectrum.
 // Call once per frame before anything else that touches the audio data.
+// ──────────────────────────────────────────────────────────────────────
+// Automatic level control. The analyser maps each bin's level into 0–255
+// across a fixed dB window (browser default −100 … −30 dB). A quiet mic
+// sits comfortably inside it; a hot line-level signal (BlackHole, audio
+// interface) lands above the top and every bin pins at 255. This slides
+// the window to fit the actual input:
+//   • peaks hitting the ceiling → window moves UP fast (attack)
+//   • peaks well below target   → window moves DOWN slowly (release)
+//   • near-silence              → hold (don't pull up the noise floor)
+// It's one global window, so the balance between channels is preserved.
+// ──────────────────────────────────────────────────────────────────────
+const AGC_RANGE_DB    = 70;     // width of the window (max − min)
+const AGC_MAX_DB_LO   = -55;    // most sensitive allowed ceiling
+const AGC_MAX_DB_HI   = 0;      // least sensitive allowed ceiling
+const AGC_START_DB    = -30;    // browser default — starting point
+const AGC_ATTACK_DBS  = 24;     // dB/s upward when clipping
+const AGC_RELEASE_DBS = 4;      // dB/s downward when too quiet
+const AGC_CLIP_BYTE   = 250;    // peak ≥ this → treat as clipping
+const AGC_LOW_BYTE    = 200;    // peak <  this → room to come down
+const AGC_GATE_BYTE   = 60;     // peak <  this → silence, hold
+let agcMaxDb = AGC_START_DB;
+let agcLastT = 0;
+
+function resetAutoLevel() {
+  agcMaxDb = AGC_START_DB;
+  agcLastT = 0;
+  if (analyser) applyAutoLevelWindow();
+}
+function applyAutoLevelWindow() {
+  // Order matters: min must stay below max at every step or the browser throws
+  const newMin = agcMaxDb - AGC_RANGE_DB;
+  if (agcMaxDb > analyser.maxDecibels) {
+    analyser.maxDecibels = agcMaxDb;
+    analyser.minDecibels = newMin;
+  } else {
+    analyser.minDecibels = newMin;
+    analyser.maxDecibels = agcMaxDb;
+  }
+}
+function updateAutoLevel() {
+  const now = performance.now();
+  const dt = agcLastT ? Math.min(0.1, (now - agcLastT) / 1000) : 0;
+  agcLastT = now;
+  if (!dt) return;
+  // Peak over the musically relevant bins (≈ 20 Hz – 16 kHz)
+  const nyquist = analyser.context.sampleRate / 2;
+  const n = rawFreqBuf.length;
+  const lo = Math.max(1, Math.floor(20 / nyquist * n));
+  const hi = Math.min(n - 1, Math.ceil(16000 / nyquist * n));
+  let peak = 0;
+  for (let i = lo; i <= hi; i++) if (rawFreqBuf[i] > peak) peak = rawFreqBuf[i];
+
+  let next = agcMaxDb;
+  if (peak >= AGC_CLIP_BYTE)                         next += AGC_ATTACK_DBS * dt;
+  else if (peak >= AGC_GATE_BYTE && peak < AGC_LOW_BYTE) next -= AGC_RELEASE_DBS * dt;
+  next = Math.max(AGC_MAX_DB_LO, Math.min(AGC_MAX_DB_HI, next));
+  if (next !== agcMaxDb) { agcMaxDb = next; applyAutoLevelWindow(); }
+}
+
 function captureCompensatedSpectrum() {
   if (!analyser) return;
   if (!boostCurve || boostCurve.length !== analyser.frequencyBinCount) {
     buildBoostCurve();
   }
   analyser.getByteFrequencyData(rawFreqBuf);
+  updateAutoLevel();   // adjusts the window for the NEXT frame
   for (let i = 0; i < rawFreqBuf.length; i++) {
     const boosted = rawFreqBuf[i] * boostCurve[i];
     compensatedSpectrum[i] = boosted > 255 ? 255 : boosted;
