@@ -335,39 +335,33 @@
   }
 
   /* ────────────────────────────────────────────────────────────────────
-     Swipeable pages — the middle section of the control panel hosts three
-     screens the user can snap between: default audio controls, frequency
-     range (placeholder for now), and background colour.
+     Pages — the middle section of the control panel hosts three screens:
+     default audio controls, frequency range, and background colour. Only
+     one is visible at a time; the user switches with the paging buttons
+     below. No swipe gesture, so touch-dragging a slider never flips pages.
      ──────────────────────────────────────────────────────────────────── */
   .pages-container {
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 16px;
   }
   .pages-scroll {
     width: 100%;
     height: 130px;                       /* kept constant so panel height never jumps */
-    overflow-x: auto;
-    overflow-y: hidden;
-    scroll-snap-type: x mandatory;
+    overflow: hidden;
     display: flex;
-    scrollbar-width: none;               /* Firefox */
-    -ms-overflow-style: none;            /* legacy Edge */
-    overscroll-behavior-x: contain;
   }
-  .pages-scroll::-webkit-scrollbar { display: none; }
   .page {
     flex: 0 0 100%;
     min-width: 100%;
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
-    display: flex;
+    display: none;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     overflow: hidden;
   }
+  .page.active { display: flex; }
   .page-placeholder {
     display: flex; flex-direction: column; align-items: center; gap: 4px;
     color: var(--pr-grey-middle);
@@ -380,28 +374,32 @@
     opacity: 0.5;
   }
 
-  /* Pagination dots below the swipeable area */
+  /* Paging buttons — 32 × 32 px touch targets, each with an 8 px dot.
+     Active page: white dot; others: grey. */
   .pages-dots {
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 6px;
-    height: 8px;
   }
   .pages-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--pr-grey-main);
+    width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent;
     border: none;
     padding: 0;
     cursor: pointer;
-    transition: background 0.15s, transform 0.15s;
+    -webkit-tap-highlight-color: transparent;
   }
-  .pages-dot:hover { background: var(--pr-grey-middle); }
-  .pages-dot.active {
+  .pages-dot::before {
+    content: '';
+    width: 8px; height: 8px;
+    border-radius: 50%;
     background: var(--pr-grey-middle);
-    transform: scale(1.3);
+    transition: background 0.15s;
   }
+  .pages-dot:hover::before { background: #b5b7c0; }
+  .pages-dot.active::before { background: white; }
+  .pages-dot:focus-visible { outline: 2px solid var(--pr-purple); outline-offset: -4px; border-radius: 4px; }
 
   /* ────────────────────────────────────────────────────────────────────
      Background colour picker (HSV)
@@ -889,8 +887,8 @@
       flex-wrap: wrap;
       row-gap: 8px;
     }
-    /* The swipeable pages container grows to accommodate the taller slider
-       page (two wrapped rows). Other pages are shorter but centred vertically. */
+    /* The pages container grows to accommodate the taller slider page
+       (two wrapped rows). Other pages are shorter but centred vertically. */
     .pages-scroll {
       height: 268px;
     }
@@ -1037,7 +1035,7 @@
     <!-- Three swipeable pages: audio sliders, frequency range (placeholder), background colour -->
     <div class="pages-container">
       <div class="pages-scroll" id="pagesScroll">
-        <div class="page" data-page="default">
+        <div class="page active" data-page="default">
           <div class="vslider-row">
           <div class="vslider">
             <span class="vslider-value" id="sensValue">50</span>
@@ -2792,27 +2790,26 @@ window.addEventListener('load', syncFreqrangeLayout);
 window.addEventListener('resize', syncFreqrangeLayout);
 
 // ──────────────────────────────────────────────────────────────────────
-// Swipeable pages — the middle section of the control panel. Native
-// scroll-snap handles the touch gesture; pagination dots mirror and drive
-// the position.
+// Pages — switched only via the paging buttons (no swipe, so slider touch
+// drags never flip pages). Hidden pages are display: none, so their
+// size-dependent layout (spectrum canvas, triangle handles, colour-picker
+// thumbs) is re-synced right after a page becomes visible.
 // ──────────────────────────────────────────────────────────────────────
-const pagesScroll = document.getElementById('pagesScroll');
+const pageEls = Array.from(document.querySelectorAll('.pages-scroll .page'));
 const pagesDots = Array.from(document.querySelectorAll('.pages-dot'));
 
-function syncPagesDots() {
-  if (!pagesScroll || pagesScroll.clientWidth === 0) return;
-  const idx = Math.round(pagesScroll.scrollLeft / pagesScroll.clientWidth);
-  pagesDots.forEach((d, i) => d.classList.toggle('active', i === idx));
-}
-if (pagesScroll) {
-  pagesScroll.addEventListener('scroll', syncPagesDots);
-  window.addEventListener('resize', syncPagesDots);
+function showPage(idx) {
+  pageEls.forEach((p, i) => p.classList.toggle('active', i === idx));
+  pagesDots.forEach((d, i) => {
+    const on = i === idx;
+    d.classList.toggle('active', on);
+    d.setAttribute('aria-current', on ? 'true' : 'false');
+  });
+  syncFreqrangeLayout();
+  applyBgColor();
 }
 pagesDots.forEach((dot, i) => {
-  dot.addEventListener('click', () => {
-    if (!pagesScroll) return;
-    pagesScroll.scrollTo({ left: i * pagesScroll.clientWidth, behavior: 'smooth' });
-  });
+  dot.addEventListener('click', () => showPage(i));
 });
 
 // ──────────────────────────────────────────────────────────────────────
