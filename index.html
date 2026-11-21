@@ -171,6 +171,16 @@
     z-index: 100;
     transition: opacity 0.2s ease, transform 0.2s ease;
   }
+  /* The whole control panel is a touch instrument, not text. Block iOS
+     long-press text selection (blue handles) and the callout menu, which
+     otherwise kick in when a finger rests on a slider for a moment. */
+  .control-frame,
+  .control-frame * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
   .control-frame.hidden {
     opacity: 0;
     pointer-events: none;
@@ -2934,6 +2944,15 @@ applyBgColor();
 requestAnimationFrame(applyBgColor);
 window.addEventListener('load', applyBgColor);
 window.addEventListener('resize', applyBgColor);
+
+// Belt and braces for iOS: cancel selection and long-press context menu
+// inside the control panel, in case CSS alone doesn't stop them.
+(function () {
+  const frame = document.querySelector('.control-frame');
+  if (!frame) return;
+  frame.addEventListener('selectstart', e => e.preventDefault());
+  frame.addEventListener('contextmenu', e => e.preventDefault());
+})();
 
 // Set initial opacity
 resetUI();
