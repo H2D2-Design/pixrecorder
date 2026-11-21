@@ -1407,6 +1407,7 @@ const freqBands = [
 ];
 
 let analyser, animId, running = false;
+let micStream = null, micCtx = null;   // kept so Stop can release the device
 let sensitivity = 50;
 let scaleStrength = 50;
 let rotationSpeed = 0;
@@ -2621,13 +2622,32 @@ btn.addEventListener('click', async () => {
     setMicState('Start microphone', false);
     btn.title = '';
     setFreqrangeMicActive(false);
+    // Release the input device and audio context so the next start picks
+    // up a freshly chosen device (and the browser's mic indicator turns off).
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (micCtx) { micCtx.close().catch(() => {}); micCtx = null; }
     resetUI();
     return;
   }
   try {
     setMicState('Requesting access…', false);
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    // All browser voice processing OFF. Echo cancellation in particular
+    // removes anything identical to what the speakers are playing — with a
+    // loopback device like BlackHole that is the ENTIRE signal, so the
+    // analyser would receive silence. Noise suppression and auto gain would
+    // also flatten music dynamics. Raw input is what a visualiser needs.
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      },
+      video: false
+    });
+    micStream = stream;
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    micCtx = ctx;
+    if (ctx.state === 'suspended') await ctx.resume();
     const src = ctx.createMediaStreamSource(stream);
     analyser = ctx.createAnalyser();
     analyser.fftSize = 2048;
@@ -2636,7 +2656,9 @@ btn.addEventListener('click', async () => {
     buildBoostCurve();   // one-off init — depends on sample rate + FFT size
     running = true;
     setMicState('Stop microphone', true);
-    btn.title = '';
+    // Show which input the browser actually picked (hover the button)
+    const track = stream.getAudioTracks()[0];
+    btn.title = track && track.label ? 'Input: ' + track.label : '';
     setFreqrangeMicActive(true);
     animate();
   } catch (e) {
