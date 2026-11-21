@@ -1408,6 +1408,94 @@ const freqBands = [
 
 let analyser, animId, running = false;
 let micStream = null, micCtx = null;   // kept so Stop can release the device
+
+// ──────────────────────────────────────────────────────────────────────
+// Line mode — dynamics expander for internal routing (BlackHole etc.).
+// Mastered music arrives heavily compressed: each band hovers in a narrow
+// level window, so icons barely move. Per channel we track a floating
+// floor and ceiling of its recent level (fast to follow new extremes,
+// slow to relax), stretch the current value across that span, then apply
+// a contrast curve so small wobbles stay calm and hits pop.
+//   • LINE_MIN_SPAN keeps tiny noise from being blown up to full swings
+//   • a channel whose ceiling is near zero stays silent (gate)
+// Mic input never goes through this — it has natural dynamics already.
+// ──────────────────────────────────────────────────────────────────────
+const LINE_DEVICE_RE = /blackhole|loopback|vb-?cable|soundflower|virtual/i;
+const LINE_FOLLOW_FAST = 3;     // 1/s — how fast floor/ceiling chase new extremes
+                                // (slow enough that a hit can overshoot the
+                                // ceiling and register as a full-height peak)
+const LINE_FOLLOW_SLOW = 0.35;  // 1/s — how fast they relax back (~3 s)
+const LINE_MIN_SPAN    = 0.2;   // minimum floor→ceiling span (0–1 scale)
+const LINE_CONTRAST    = 1.4;   // >1 = calmer lows, punchier peaks
+const LINE_OUT_GAIN    = 1.6;   // headroom stretch so strong hits reach the top
+const LINE_GATE        = 0.06;  // ceiling below this → channel treated as silent
+// Output envelope — calms the result: rises fast so hits land immediately,
+// falls slower so icons glide back instead of jittering frame to frame.
+const LINE_ATTACK      = 40;    // 1/s rise rate
+const LINE_RELEASE     = 5;     // 1/s fall rate (~200 ms)
+const lineOut   = new Float32Array(6);
+let lineMode = false;
+const lineFloor = new Float32Array(6);
+const lineCeil  = new Float32Array(6);
+
+// Spectral focus — each channel band is split into LINE_SUBBANDS narrow
+// log-spaced slices. For every slice we keep a running mean and variance
+// (~2 s memory). The channel level is the variance-weighted average of
+// its slices: a slice carrying hits (kick, snare, hats) dominates, a flat
+// sustained pad hardly counts. Weighting is soft, so nothing jumps when
+// the music changes. Reads the RAW spectrum: no boost, no clipping —
+// the expander normalises per channel anyway, and the boost would push
+// mids past 255 where every movement gets flattened.
+const LINE_SUBBANDS   = 4;
+const LINE_STATS_RATE = 0.5;    // 1/s — memory of the per-slice statistics
+const lineSubMean = new Float32Array(6 * LINE_SUBBANDS);
+const lineSubVar  = new Float32Array(6 * LINE_SUBBANDS);
+
+function focusedLineLevel(ch, lo, hi, sr, fft, dt) {
+  const a = Math.min(1, dt * LINE_STATS_RATE);
+  const logLo = Math.log10(lo);
+  const step = (Math.log10(hi) - logLo) / LINE_SUBBANDS;
+  const maxBin = rawFreqBuf.length - 1;
+  let wSum = 0, vSum = 0;
+  for (let k = 0; k < LINE_SUBBANDS; k++) {
+    const fLo = Math.pow(10, logLo + k * step);
+    const fHi = Math.pow(10, logLo + (k + 1) * step);
+    const bLo = Math.min(maxBin, freqToIndex(fLo, sr, fft));
+    const bHi = Math.max(bLo, Math.min(maxBin, freqToIndex(fHi, sr, fft)));
+    let sum = 0;
+    for (let b = bLo; b <= bHi; b++) sum += rawFreqBuf[b];
+    const v = sum / (bHi - bLo + 1) / 255;
+    const idx = ch * LINE_SUBBANDS + k;
+    lineSubMean[idx] += (v - lineSubMean[idx]) * a;
+    const d = v - lineSubMean[idx];
+    lineSubVar[idx] += (d * d - lineSubVar[idx]) * a;
+    const w = lineSubVar[idx] + 1e-5;
+    wSum += w;
+    vSum += w * v;
+  }
+  return vSum / wSum;
+}
+
+function resetLineDynamics() {
+  lineFloor.fill(0.5);
+  lineCeil.fill(0.5);
+  lineOut.fill(0);
+  lineSubMean.fill(0.5);
+  lineSubVar.fill(0);
+}
+function expandDynamics(i, s, dt) {
+  const fast = Math.min(1, dt * LINE_FOLLOW_FAST);
+  const slow = Math.min(1, dt * LINE_FOLLOW_SLOW);
+  lineFloor[i] += (s - lineFloor[i]) * (s < lineFloor[i] ? fast : slow);
+  lineCeil[i]  += (s - lineCeil[i])  * (s > lineCeil[i]  ? fast : slow);
+  const span = Math.max(lineCeil[i] - lineFloor[i], LINE_MIN_SPAN);
+  const n = Math.max(0, Math.min(1, (s - lineFloor[i]) / span * LINE_OUT_GAIN));
+  const gate = Math.min(1, lineCeil[i] / LINE_GATE);
+  const target = Math.pow(n, LINE_CONTRAST) * gate;
+  const rate = target > lineOut[i] ? LINE_ATTACK : LINE_RELEASE;
+  lineOut[i] += (target - lineOut[i]) * Math.min(1, dt * rate);
+  return lineOut[i];
+}
 let sensitivity = 50;
 let scaleStrength = 50;
 let rotationSpeed = 0;
@@ -1785,7 +1873,12 @@ function animate(now) {
     const s = Math.min(1, avg / 200);
 
     // effS: raw signal amplified by global sensitivity
-    const effS = Math.min(1, s * (sensitivity / 100));
+    // Line mode (internal routing): stretch this channel's own recent
+    // range to full motion; mic input passes through unchanged.
+    const sAnim = lineMode
+      ? expandDynamics(i, focusedLineLevel(i, lo, hi, sr, fft, dt), dt)
+      : s;
+    const effS = Math.min(1, sAnim * (sensitivity / 100));
 
     // SIZE: scaleStrength controls max growth (0=none, 100=20x)
     const maxScale = 1 + Math.pow(scaleStrength / 100, 1.8) * 19;
@@ -1854,7 +1947,8 @@ function animate(now) {
     barEls[i].style.width = Math.round(effS * 100) + '%';
 
     // EQ: use raw s for true signal level (unaffected by sensitivity)
-    const eqPct = Math.round(s * 100);
+    // Line mode: show what actually drives the icons; mic: true signal level
+    const eqPct = Math.round((lineMode ? sAnim : s) * 100);
     eqBarEls[i].style.height = eqPct + '%';
     // Peak hold: rise instantly, fall slowly
     if (eqPct >= peakHold[i]) {
@@ -2659,7 +2753,12 @@ btn.addEventListener('click', async () => {
     setMicState('Stop microphone', true);
     // Show which input the browser actually picked (hover the button)
     const track = stream.getAudioTracks()[0];
-    btn.title = track && track.label ? 'Input: ' + track.label : '';
+    const label = track && track.label ? track.label : '';
+    lineMode = LINE_DEVICE_RE.test(label);
+    resetLineDynamics();
+    // Internal routing: less analyser smoothing so transients survive
+    analyser.smoothingTimeConstant = lineMode ? 0.65 : 0.8;
+    btn.title = label ? 'Input: ' + label + (lineMode ? ' · line mode' : '') : '';
     setFreqrangeMicActive(true);
     animate();
   } catch (e) {
