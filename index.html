@@ -134,6 +134,9 @@
 
   .channel-svg-wrap {
     width: 96px; height: 96px;
+    flex: none;                 /* keep the box size set per icon (imported SVGs
+                                   at their designed size) — don't let the 96 px
+                                   .channel flex container squeeze it */
     display: flex; align-items: center; justify-content: center;
     position: relative; z-index: 1;
   }
@@ -1672,7 +1675,40 @@ async function processSvgFile(file) {
   const clean = sanitizeSvgString(text);
   // Base64 encode for a self-contained data URL (handles non-ASCII safely)
   const b64 = btoa(unescape(encodeURIComponent(clean)));
-  return { kind: 'svg', dataUrl: `data:image/svg+xml;base64,${b64}` };
+  const size = svgDesignSize(clean);   // { w, h } in px as authored, or null
+  return { kind: 'svg', dataUrl: `data:image/svg+xml;base64,${b64}`, size };
+}
+
+// Read the size an SVG was designed at: its width/height attributes (px or
+// unitless), falling back to the viewBox. Percent or other relative units
+// carry no absolute size, so they fall back to the viewBox too. Returns null
+// if nothing usable is found — the icon then uses the default 96 px box.
+function svgDesignSize(svgString) {
+  try {
+    const root = new DOMParser().parseFromString(svgString, 'image/svg+xml').documentElement;
+    const abs = (v) => {
+      const m = /^\s*([\d.]+)\s*(px)?\s*$/i.exec(v || '');
+      return m ? parseFloat(m[1]) : NaN;
+    };
+    let w = abs(root.getAttribute('width'));
+    let h = abs(root.getAttribute('height'));
+    const vb = (root.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    const vbOk = vb.length === 4 && vb[2] > 0 && vb[3] > 0;
+    if (!(w > 0) && !(h > 0) && vbOk) { w = vb[2]; h = vb[3]; }
+    else if (w > 0 && !(h > 0) && vbOk) h = w * vb[3] / vb[2];
+    else if (h > 0 && !(w > 0) && vbOk) w = h * vb[2] / vb[3];
+    return (w > 0 && h > 0) ? { w, h } : null;
+  } catch (_) { return null; }
+}
+
+// Box size for channel i: imported SVGs render at their designed size
+// (longer side), so a 4000 × 2 px hairline stays a hairline instead of being
+// squeezed into 96 px. Defaults and bitmaps keep the standard 96 px box.
+const DEFAULT_ICON_BOX = 96;
+function channelNativeSize(i) {
+  const c = customIcons[i];
+  if (c && c.kind === 'svg' && c.size) return Math.max(c.size.w, c.size.h);
+  return 0;
 }
 
 // Convert a bitmap file (PNG/JPG) to a data URL, resized if necessary.
@@ -1722,6 +1758,13 @@ function applyChannelIconDom(i) {
   if (!host) return;
   const dataUrl = customIcons[i] ? customIcons[i].dataUrl : getChannelIcon(i);
   host.src = dataUrl;
+  // Box the icon is fitted into: designed size for imported SVGs, else 96 px
+  const box = channelNativeSize(i) || DEFAULT_ICON_BOX;
+  const wrap = host.parentElement;
+  if (wrap) {
+    wrap.style.width  = box + 'px';
+    wrap.style.height = box + 'px';
+  }
 }
 
 // ── Async asset pipeline (iconImages + union eraser) ──────────────────────
@@ -1952,7 +1995,9 @@ function animate(now) {
         i,
         cx: wrapRect.left + wrapRect.width / 2 + tx,
         cy: wrapRect.top + wrapRect.height / 2 + ty,
-        size: 80 * scale,
+        // Trail stamp size: designed size for imported SVGs (matches the DOM
+        // icon); defaults keep their established 80 px trail stamp.
+        size: (channelNativeSize(i) || 80) * scale,
         rot: rotAngles[i],
         alpha: 0.35 + opacityS * 0.65   // matches DOM icon opacity formula
       });
