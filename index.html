@@ -158,6 +158,14 @@
     display: none;
   }
   body.trails-on #trailsCanvas { display: block; }
+  /* Trails 1 fades by multiplying the canvas alpha by 0.985 each frame. The
+     canvas stores alpha in 8 bits, so once a pixel drops below ~13 % the
+     1.5 % step is less than half a level, rounding cancels it, and the pixel
+     never reaches zero — faint ghosts stay forever. Checking pixels on the
+     CPU is too costly at Retina size, so the cut happens at display time on
+     the GPU: an SVG alpha-transfer filter maps everything under 15 % to
+     zero, ramps smoothly up to 30 %, and leaves stronger trails untouched. */
+  body.trails-mode-1 #trailsCanvas { filter: url(#trails1Cut); }
   body.trails-on .channel-svg-wrap .channel-icon { opacity: 0 !important; }
 
   /* ── Hint pill (briefly shown when frame is hidden) ── */
@@ -1119,6 +1127,16 @@
 
 <!-- Trails canvas — full viewport, only visible in trails mode -->
 <canvas id="trailsCanvas"></canvas>
+<!-- Trails 1 residue cut — see #trailsCanvas CSS. Alpha transfer table over
+     21 evenly spaced inputs (0, 0.05 … 1): ≤ 0.15 → 0, a short ramp to 0.3,
+     identity above. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <filter id="trails1Cut" color-interpolation-filters="sRGB">
+    <feComponentTransfer>
+      <feFuncA type="table" tableValues="0 0 0 0 0.08 0.2 0.3 0.35 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9 0.95 1"/>
+    </feComponentTransfer>
+  </filter>
+</svg>
 
 <!-- Hint pill that briefly appears when the frame is hidden -->
 <div id="presentHint">Tap or press ESC to bring back the controls</div>
@@ -1429,10 +1447,10 @@ const LINE_MIN_SPAN    = 0.2;   // minimum floor→ceiling span (0–1 scale)
 const LINE_CONTRAST    = 1.4;   // >1 = calmer lows, punchier peaks
 const LINE_OUT_GAIN    = 1.6;   // headroom stretch so strong hits reach the top
 const LINE_GATE        = 0.06;  // ceiling below this → channel treated as silent
-// Output envelope — calms the result: rises fast so hits land immediately,
-// falls slower so icons glide back instead of jittering frame to frame.
-const LINE_ATTACK      = 40;    // 1/s rise rate
-const LINE_RELEASE     = 5;     // 1/s fall rate (~200 ms)
+// Output envelope — calms the result without adding latency: rises are
+// passed through instantly so hits land on the beat; only the fall is
+// smoothed so icons glide back instead of jittering frame to frame.
+const LINE_RELEASE     = 3.5;   // 1/s fall rate (~285 ms)
 const lineOut   = new Float32Array(6);
 let lineMode = false;
 const lineFloor = new Float32Array(6);
@@ -1492,8 +1510,8 @@ function expandDynamics(i, s, dt) {
   const n = Math.max(0, Math.min(1, (s - lineFloor[i]) / span * LINE_OUT_GAIN));
   const gate = Math.min(1, lineCeil[i] / LINE_GATE);
   const target = Math.pow(n, LINE_CONTRAST) * gate;
-  const rate = target > lineOut[i] ? LINE_ATTACK : LINE_RELEASE;
-  lineOut[i] += (target - lineOut[i]) * Math.min(1, dt * rate);
+  if (target >= lineOut[i]) lineOut[i] = target;                       // instant attack
+  else lineOut[i] += (target - lineOut[i]) * Math.min(1, dt * LINE_RELEASE);
   return lineOut[i];
 }
 let sensitivity = 50;
@@ -2242,6 +2260,7 @@ function selectTrailsMode(mode) {
   if (trailsMode === mode) return;
   trailsMode = mode;
   document.body.classList.toggle('trails-on', mode !== null);
+  document.body.classList.toggle('trails-mode-1', mode === 1);
   document.querySelectorAll('[data-trails-mode]').forEach(btn => {
     const btnMode = parseInt(btn.dataset.trailsMode, 10);
     btn.classList.toggle('active', mode !== null && btnMode === mode);
@@ -2734,7 +2753,8 @@ btn.addEventListener('click', async () => {
       audio: {
         echoCancellation: false,
         noiseSuppression: false,
-        autoGainControl: false
+        autoGainControl: false,
+        latency: 0                     // ask for the smallest input buffer
       },
       video: false
     });
@@ -2756,8 +2776,10 @@ btn.addEventListener('click', async () => {
     const label = track && track.label ? track.label : '';
     lineMode = LINE_DEVICE_RE.test(label);
     resetLineDynamics();
-    // Internal routing: less analyser smoothing so transients survive
-    analyser.smoothingTimeConstant = lineMode ? 0.65 : 0.8;
+    // Internal routing: almost no analyser smoothing. The analyser smooths
+    // rises and falls alike, which adds ~90 ms lag at 0.65; the line-mode
+    // envelope already calms the falls, so rises can come through raw.
+    analyser.smoothingTimeConstant = lineMode ? 0.2 : 0.8;
     btn.title = label ? 'Input: ' + label + (lineMode ? ' · line mode' : '') : '';
     setFreqrangeMicActive(true);
     animate();
