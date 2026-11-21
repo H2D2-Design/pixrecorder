@@ -1430,6 +1430,11 @@ const freqBands = [
 let analyser, animId, running = false;
 let micStream = null, micCtx = null;   // kept so Stop can release the device
 
+// Icon opacity range: silence → ICON_ALPHA_MIN, full signal → 1. Kept high
+// so the graphics stay present on stage; loudness only adds the last bit of
+// brightness. (Was 0.35, which made quiet passages look washed out.)
+const ICON_ALPHA_MIN = 0.7;
+
 // ──────────────────────────────────────────────────────────────────────
 // Line mode — dynamics expander for internal routing (BlackHole etc.).
 // Mastered music arrives heavily compressed: each band hovers in a narrow
@@ -1591,7 +1596,7 @@ eqToggleEls.forEach((toggle, i) => {
 
     if (channelEnabled[i]) {
       // Show again — baseline opacity; the animation loop will take over from here
-      iconEls[i].style.opacity = '0.35';
+      iconEls[i].style.opacity = String(ICON_ALPHA_MIN);
     } else {
       // Hide completely + reset to base pose so it doesn't re-appear mid-flight
       iconEls[i].style.opacity = '0';
@@ -1999,12 +2004,12 @@ function animate(now) {
         // icon); defaults keep their established 80 px trail stamp.
         size: (channelNativeSize(i) || 80) * scale,
         rot: rotAngles[i],
-        alpha: 0.35 + opacityS * 0.65   // matches DOM icon opacity formula
+        alpha: ICON_ALPHA_MIN + opacityS * (1 - ICON_ALPHA_MIN)   // matches DOM icon opacity
       });
     }
 
     // DOM icon opacity uses the same saturated curve; EQ bar stays on raw effS
-    iconEls[i].style.opacity = (0.35 + opacityS * 0.65).toFixed(3);
+    iconEls[i].style.opacity = (ICON_ALPHA_MIN + opacityS * (1 - ICON_ALPHA_MIN)).toFixed(3);
     if (effS > 0.05) channelEls[i].classList.add('lit');
     else channelEls[i].classList.remove('lit');
     barEls[i].style.width = Math.round(effS * 100) + '%';
@@ -2074,7 +2079,7 @@ function animate(now) {
       }
     }
     // Pass 2: draw the icon white, with the same alpha as the DOM icon
-    // (0.35 baseline → 1.0 at full signal). Each trail copy persists at the alpha
+    // (ICON_ALPHA_MIN baseline → 1.0 at full signal). Each trail copy persists at the alpha
     // it was drawn with, so faint trails appear during quiet passages.
     for (const d of trailDraws) {
       trailsCtx.save();
@@ -2744,7 +2749,7 @@ function resetUI() {
   eqPeakEls.forEach(el => el.style.bottom = '0%');
   iconEls.forEach((el, i) => {
     el.style.transform = 'translate(0px, 0px) scale(1) rotate(0deg)';
-    el.style.opacity = channelEnabled[i] ? '0.35' : '0';
+    el.style.opacity = channelEnabled[i] ? String(ICON_ALPHA_MIN) : '0';
   });
   barEls.forEach(b => b.style.width = '0%');
   dbEls.forEach(d => d.textContent = '– dB');
