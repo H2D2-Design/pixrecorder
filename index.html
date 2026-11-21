@@ -82,16 +82,6 @@
   html, body { height: 100%; background: var(--bg); color: var(--text-primary); font-family: var(--font-ui); overflow: hidden; }
   body { display: flex; flex-direction: column; min-height: 100vh; }
 
-  body::before {
-    content: '';
-    position: fixed; inset: 0;
-    background-image:
-      linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
-    background-size: 40px 40px;
-    pointer-events: none; z-index: 0;
-  }
-
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
 
   /* ── Brand logo — fixed top-right of the stage, subtle background presence ── */
@@ -128,16 +118,6 @@
     transition: transform 0.25s ease;
   }
 
-  .channel-glow {
-    position: absolute; top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    width: 220px; height: 220px;
-    border-radius: 50%;
-    opacity: 0;
-    transition: opacity 0.08s;
-    pointer-events: none; filter: blur(40px);
-  }
-
   .channel-svg-wrap {
     width: 96px; height: 96px;
     display: flex; align-items: center; justify-content: center;
@@ -165,7 +145,6 @@
   }
   body.trails-on #trailsCanvas { display: block; }
   body.trails-on .channel-svg-wrap .channel-icon { opacity: 0 !important; }
-  body.trails-on .channel-glow { opacity: 0 !important; }
 
   /* ── Hint pill (briefly shown when frame is hidden) ── */
   #presentHint {
@@ -1236,12 +1215,12 @@ function getIconSet()      { return ICON_SETS[currentSetId] || ICON_SETS[1]; }
 function getChannelIcon(i) { return getIconSet().icons[i]; }
 
 const CHANNELS = [
-  { label: "Kick (909)",     range: "40 – 120 Hz",      glowColor: "#7F77DD", barColor: "#AFA9EC" },
-  { label: "Kick Punch",     range: "120 – 350 Hz",     glowColor: "#D85A30", barColor: "#F0997B" },
-  { label: "Snare / Clap",   range: "350 – 1,200 Hz",   glowColor: "#1D9E75", barColor: "#5DCAA5" },
-  { label: "Mids",           range: "1.2 – 3.5 kHz",    glowColor: "#378ADD", barColor: "#85B7EB" },
-  { label: "Hi-Hat Body",    range: "3.5 – 8 kHz",      glowColor: "#EF9F27", barColor: "#FAC775" },
-  { label: "Hi-Hat Air",     range: "8 – 18 kHz",       glowColor: "#D4537E", barColor: "#ED93B1" }
+  { label: "Kick (909)",     range: "40 – 120 Hz",      barColor: "#AFA9EC" },
+  { label: "Kick Punch",     range: "120 – 350 Hz",     barColor: "#F0997B" },
+  { label: "Snare / Clap",   range: "350 – 1,200 Hz",   barColor: "#5DCAA5" },
+  { label: "Mids",           range: "1.2 – 3.5 kHz",    barColor: "#85B7EB" },
+  { label: "Hi-Hat Body",    range: "3.5 – 8 kHz",      barColor: "#FAC775" },
+  { label: "Hi-Hat Air",     range: "8 – 18 kHz",       barColor: "#ED93B1" }
 ];
 
 const freqBands = [
@@ -1258,7 +1237,7 @@ let sineStrength = 0;
 // per-channel accumulated rotation angles (degrees)
 const rotAngles = [0, 0, 0, 0, 0, 0];
 let lastFrameTime = 0;
-const iconEls = [], barEls = [], dbEls = [], glowEls = [], channelEls = [];
+const iconEls = [], barEls = [], dbEls = [], channelEls = [];
 
 const grid = document.getElementById('grid');
 
@@ -1266,7 +1245,6 @@ CHANNELS.forEach((ch, i) => {
   const div = document.createElement('div');
   div.className = 'channel';
   div.innerHTML = `
-    <div class="channel-glow" id="glow${i}" style="background:${ch.glowColor}"></div>
     <div class="channel-svg-wrap" id="wrap${i}">
       <img id="icon${i}" class="channel-icon" src="${getChannelIcon(i)}" alt="" draggable="false">
     </div>
@@ -1281,7 +1259,6 @@ CHANNELS.forEach((ch, i) => {
   iconEls.push(document.getElementById(`icon${i}`));
   barEls.push(document.getElementById(`bar${i}`));
   dbEls.push(document.getElementById(`db${i}`));
-  glowEls.push(document.getElementById(`glow${i}`));
   channelEls.push(div);
 });
 
@@ -1330,7 +1307,6 @@ eqToggleEls.forEach((toggle, i) => {
       // Hide completely + reset to base pose so it doesn't re-appear mid-flight
       iconEls[i].style.opacity = '0';
       iconEls[i].style.transform = 'translate(0px,0px) scale(1) rotate(0deg)';
-      glowEls[i].style.opacity = '0';
       eqBarEls[i].style.height = '0%';
       eqPeakEls[i].style.bottom = '0%';
       peakHold[i] = 0;
@@ -1685,9 +1661,8 @@ function animate(now) {
       });
     }
 
-    // DOM icon opacity uses the same saturated curve; glow + EQ bar stay on raw effS
+    // DOM icon opacity uses the same saturated curve; EQ bar stays on raw effS
     iconEls[i].style.opacity = (0.35 + opacityS * 0.65).toFixed(3);
-    glowEls[i].style.opacity = (effS * 0.4).toFixed(3);
     if (effS > 0.05) channelEls[i].classList.add('lit');
     else channelEls[i].classList.remove('lit');
     barEls[i].style.width = Math.round(effS * 100) + '%';
@@ -2434,7 +2409,6 @@ function resetUI() {
   });
   barEls.forEach(b => b.style.width = '0%');
   dbEls.forEach(d => d.textContent = '– dB');
-  glowEls.forEach(g => g.style.opacity = '0');
   channelEls.forEach(c => c.classList.remove('lit'));
 }
 
