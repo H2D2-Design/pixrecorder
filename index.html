@@ -1616,22 +1616,26 @@ function animate(now) {
     const degsPerSec = maxDegsPerSec * Math.pow(effS, 0.6);
     rotAngles[i] = (rotAngles[i] + degsPerSec * dt) % 360;
     // FLUGKURVE: kombinierte Sinus/Cosinus-Bewegung in X und Y
-    //  - sineStrength steuert die Frequenz (0 = keine Bewegung)
+    //  - sineStrength steuert die Frequenz (0 = gerade Y-Bewegung, siehe unten)
     //  - xStrength → X-Amplitude (sin), yStrength → Y-Amplitude (cos)
     //  - Each channel has its own phase offset + slight Y-frequency factor,
     //    sodass nicht alle 6 Icons dieselbe Ellipse tracen, sondern jeder seine
     //    own Lissajous-style flight path.
+    //  - Sinus = 0: no oscillation — each icon moves straight up the Y axis,
+    //    displacement = signal × Y amount. Quiet → back to the baseline.
     let tx = 0, ty = 0;
-    if (sineStrength > 0) {
+    const maxOffsetY = 700;
+    const yFactor = Math.pow(yStrength / 100, 1.6);
+    const ampY = effS * yFactor * maxOffsetY;
+    if (sineStrength === 0) {
+      ty = -ampY;
+    } else {
       // X-amplitude is viewport-relative → at high X-Spread icons can
       // links/rechts aus dem Sichtbereich fliegen (auch bei großen Monitoren).
       const maxOffsetX = Math.max(900, window.innerWidth * 0.75);
-      const maxOffsetY = 700;
       const freq = Math.pow(sineStrength / 100, 1.4) * 1.5; // 0–1.5 Hz
       const xFactor = Math.pow(xStrength / 100, 1.6);
-      const yFactor = Math.pow(yStrength / 100, 1.6);
       const ampX = effS * xFactor * maxOffsetX;
-      const ampY = effS * yFactor * maxOffsetY;
       const t = (now || 0) / 1000;
       const omega = freq * 2 * Math.PI;
       const phase = i * (Math.PI / 3);          // 6 Kanäle gleichmäßig über den Zyklus
@@ -1929,23 +1933,15 @@ requestAnimationFrame(applyLayoutSpread);
 window.addEventListener('load', applyLayoutSpread);
 window.addEventListener('resize', applyLayoutSpread);
 
-// Sine slider (controls Y oscillation frequency; gates the Y slider)
+// Sine slider (controls oscillation frequency; 0 = straight Y movement)
 const sineSlider = document.getElementById('sineSlider');
 const sineValueEl = document.getElementById('sineValue');
 function updateSineTrack(val) { sineSlider.style.setProperty('--pct', val + '%'); }
-
-function updateYDisabled() {
-  const off = sineStrength === 0;
-  ySlider.disabled = off;
-  const wrap = ySlider.closest('.vslider');
-  if (wrap) wrap.classList.toggle('disabled', off);
-}
 
 sineSlider.addEventListener('input', () => {
   sineStrength = parseInt(sineSlider.value, 10);
   sineValueEl.textContent = sineStrength;
   updateSineTrack(sineStrength);
-  updateYDisabled();
 });
 updateSineTrack(0);
 
@@ -1959,7 +1955,6 @@ ySlider.addEventListener('input', () => {
   updateYTrack(yStrength);
 });
 updateYTrack(50);
-updateYDisabled();
 
 
 // Layout toggle
