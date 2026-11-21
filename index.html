@@ -608,21 +608,54 @@
   /* "No audio input" overlay — shown whenever the mic isn't running.
      Replaces the spectrum, handles, and pill (via no-signal class). */
   /* ────────────────────────────────────────────────────────────────────
-     Background image page — same rhythm as the frequency page: an 82 px
-     preview box with the label below. Tap the box (or drop a file on it)
-     to choose an image; with an image set, Replace / Remove pills appear.
+     Background image page — three rows inside the fixed page height:
+       1. label + Fill | Original segmented toggle
+       2. preview box (tap / drop to choose; Replace / Remove when set)
+       3. horizontal Scale slider with % readout
+     Mode toggle and Scale are dimmed until an image is chosen.
      ──────────────────────────────────────────────────────────────────── */
   .bgimage {
     width: 100%;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 4px;
+    gap: 8px;
+    padding: 0 8px;                    /* room for the slider thumb at the extremes */
+    box-sizing: border-box;
   }
+  .bgimage-head {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 24px;
+  }
+  .bgimage-label {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 24px;
+    color: var(--pr-grey-middle);
+  }
+  .bgimage-seg {
+    display: flex;
+    background: var(--pr-grey-main);
+    border-radius: 4px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .bgimage-seg button {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 20px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--pr-grey-middle);
+    cursor: pointer;
+  }
+  .bgimage-seg button:hover { color: white; }
+  .bgimage-seg button.active { background: var(--pr-purple); color: var(--pr-grey-dark); }
   .bgimage-box {
     position: relative;
     width: 100%;
-    height: 82px;
+    height: 50px;
     border-radius: 4px;
     background-color: var(--pr-grey-main);
     background-position: center;
@@ -658,12 +691,49 @@
     gap: 4px;
   }
   .bgimage-box.has-image .bgimage-actions { display: flex; }
-  .bgimage-label {
+  .bgimage-scale {
+    display: flex; align-items: center; gap: 12px;
+    height: 24px;
+  }
+  .bgimage-scale-label,
+  .bgimage-scale-value {
     font-family: var(--font-ui);
     font-size: 14px;
     line-height: 24px;
     color: var(--pr-grey-middle);
+    white-space: nowrap;
   }
+  .bgimage-scale-value { min-width: 44px; text-align: right; }
+  .bgimage-scale-wrap {
+    position: relative;
+    flex: 1;
+    height: 24px;
+    cursor: pointer;
+    touch-action: none;
+  }
+  .bgimage-scale-wrap::before {          /* the 3 px track, same as the vertical sliders */
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 50%;
+    height: 3px;
+    transform: translateY(-50%);
+    background: var(--pr-grey-main);
+  }
+  .bgimage-scale-thumb {
+    position: absolute;
+    top: 50%;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--pr-purple);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    transition: box-shadow 0.15s;
+  }
+  .bgimage-scale-wrap:hover .bgimage-scale-thumb,
+  .bgimage-scale-wrap:focus-visible .bgimage-scale-thumb { box-shadow: 0 0 0 4px rgba(180,158,229,0.20); }
+  .bgimage-scale-wrap:focus-visible { outline: none; }
+  .bgimage:not(.has-image) .bgimage-seg,
+  .bgimage:not(.has-image) .bgimage-scale { opacity: 0.35; pointer-events: none; }
 
   .freqrange-no-input {
     position: absolute;
@@ -1186,7 +1256,14 @@
           </div>
         </div>
         <div class="page" data-page="bgimage">
-          <div class="bgimage">
+          <div class="bgimage" id="bgimage">
+            <div class="bgimage-head">
+              <span class="bgimage-label">Background image</span>
+              <div class="bgimage-seg" role="group" aria-label="Image size">
+                <button type="button" class="active" data-bgimage-mode="fill" aria-pressed="true">Fill</button>
+                <button type="button" data-bgimage-mode="original" aria-pressed="false">Original</button>
+              </div>
+            </div>
             <div class="bgimage-box" id="bgimageBox" role="button" tabindex="0" aria-label="Choose background image">
               <span class="bgimage-pill bgimage-empty">Choose image</span>
               <div class="bgimage-actions">
@@ -1194,7 +1271,14 @@
                 <button type="button" class="bgimage-pill" id="bgimageRemove">Remove</button>
               </div>
             </div>
-            <span class="bgimage-label">Background image</span>
+            <div class="bgimage-scale">
+              <span class="bgimage-scale-label">Scale</span>
+              <div class="bgimage-scale-wrap" id="bgimageScale" role="slider" tabindex="0"
+                   aria-label="Background image scale" aria-valuemin="25" aria-valuemax="400" aria-valuenow="100">
+                <div class="bgimage-scale-thumb" id="bgimageScaleThumb"></div>
+              </div>
+              <span class="bgimage-scale-value" id="bgimageScaleValue">100 %</span>
+            </div>
             <input type="file" id="bgimageInput" accept="image/*" hidden>
           </div>
         </div>
@@ -3035,19 +3119,70 @@ window.addEventListener('load', applyBgColor);
 window.addEventListener('resize', applyBgColor);
 
 // ──────────────────────────────────────────────────────────────────────
-// Background image — user picks any image file; it's shown full-bleed on
-// the stage (background-size: cover) above the stage colour. Kept in
-// memory as an object URL for the session; the old URL is revoked on
-// replace/remove so memory doesn't pile up.
+// Background image — user picks any image file; it's shown on the stage
+// above the stage colour. Two size modes:
+//   • Fill     — covers the viewport edge to edge (like CSS cover)
+//   • Original — the image's natural size, centred
+// The Scale slider multiplies either base size (25 % – 400 %, log scale,
+// 100 % in the middle). Switching mode resets Scale to 100 % so each mode
+// starts from its natural state. Sizes are computed in px from the image's
+// natural dimensions and re-applied on viewport resize. Kept in memory as
+// an object URL for the session; old URLs are revoked on replace/remove.
 // ──────────────────────────────────────────────────────────────────────
 (function () {
   const stageImage = document.getElementById('stageImage');
+  const page    = document.getElementById('bgimage');
   const box     = document.getElementById('bgimageBox');
   const input   = document.getElementById('bgimageInput');
   const replace = document.getElementById('bgimageReplace');
   const remove  = document.getElementById('bgimageRemove');
+  const scaleWrap  = document.getElementById('bgimageScale');
+  const scaleThumb = document.getElementById('bgimageScaleThumb');
+  const scaleValue = document.getElementById('bgimageScaleValue');
+  const modeBtns = Array.from(document.querySelectorAll('[data-bgimage-mode]'));
   if (!stageImage || !box || !input) return;
+
+  const SCALE_MIN = 25, SCALE_MAX = 400;
+  const LOG_MIN = Math.log(SCALE_MIN), LOG_MAX = Math.log(SCALE_MAX);
   let currentUrl = null;
+  let natW = 0, natH = 0;
+  let mode = 'fill';
+  let scalePct = 100;
+
+  const posToScale = (pos) => Math.exp(LOG_MIN + pos * (LOG_MAX - LOG_MIN));
+  const scaleToPos = (pct) => (Math.log(pct) - LOG_MIN) / (LOG_MAX - LOG_MIN);
+
+  function applyStageSize() {
+    if (!currentUrl || !natW || !natH) return;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const base = mode === 'fill' ? Math.max(vw / natW, vh / natH) : 1;
+    const k = base * scalePct / 100;
+    stageImage.style.backgroundSize =
+      Math.round(natW * k) + 'px ' + Math.round(natH * k) + 'px';
+  }
+  function renderScale() {
+    const w = scaleWrap.clientWidth;
+    if (w > 0) scaleThumb.style.left = (scaleToPos(scalePct) * w) + 'px';
+    const rounded = Math.round(scalePct);
+    scaleValue.textContent = rounded + ' %';
+    scaleWrap.setAttribute('aria-valuenow', rounded);
+  }
+  function setScale(pct) {
+    scalePct = Math.max(SCALE_MIN, Math.min(SCALE_MAX, pct));
+    // Snap to 100 % near the middle so the natural size is easy to hit
+    if (Math.abs(scalePct - 100) < 4) scalePct = 100;
+    renderScale();
+    applyStageSize();
+  }
+  function setMode(m) {
+    mode = m;
+    modeBtns.forEach(b => {
+      const on = b.dataset.bgimageMode === m;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    setScale(100);
+  }
 
   function setImage(file) {
     if (!file || !file.type.startsWith('image/')) return;
@@ -3057,12 +3192,16 @@ window.addEventListener('resize', applyBgColor);
     probe.onload = () => {
       if (currentUrl) URL.revokeObjectURL(currentUrl);
       currentUrl = url;
+      natW = probe.naturalWidth;
+      natH = probe.naturalHeight;
       const css = 'url("' + url + '")';
       stageImage.style.backgroundImage = css;
       box.style.backgroundImage = css;
       stageImage.classList.add('has-image');
       box.classList.add('has-image');
+      page.classList.add('has-image');
       box.setAttribute('aria-label', 'Background image set — choose another');
+      setMode('fill');                 // fresh image → full-bleed at 100 %
     };
     probe.onerror = () => {
       URL.revokeObjectURL(url);
@@ -3073,11 +3212,15 @@ window.addEventListener('resize', applyBgColor);
   function clearImage() {
     if (currentUrl) URL.revokeObjectURL(currentUrl);
     currentUrl = null;
+    natW = natH = 0;
     stageImage.style.backgroundImage = '';
+    stageImage.style.backgroundSize = '';
     box.style.backgroundImage = '';
     stageImage.classList.remove('has-image');
     box.classList.remove('has-image');
+    page.classList.remove('has-image');
     box.setAttribute('aria-label', 'Choose background image');
+    setMode('fill');
   }
   function openPicker() { input.value = ''; input.click(); }
 
@@ -3100,6 +3243,34 @@ window.addEventListener('resize', applyBgColor);
     box.classList.remove('dragover');
     setImage(e.dataTransfer.files && e.dataTransfer.files[0]);
   });
+
+  // Mode toggle
+  modeBtns.forEach(b => b.addEventListener('click', () => setMode(b.dataset.bgimageMode)));
+
+  // Scale slider — same pointer plumbing as the colour picker
+  setupBgColorArea(scaleWrap, (e) => {
+    const rect = scaleWrap.getBoundingClientRect();
+    const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    setScale(posToScale(pos));
+  });
+  scaleWrap.addEventListener('dblclick', () => setScale(100));   // quick reset
+  scaleWrap.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 0.1 : 0.02;
+    let pos = scaleToPos(scalePct);
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp')   pos += step;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') pos -= step;
+    else if (e.key === 'Home') pos = 0;
+    else if (e.key === 'End')  pos = 1;
+    else return;
+    e.preventDefault();
+    setScale(posToScale(Math.max(0, Math.min(1, pos))));
+  });
+
+  window.addEventListener('resize', () => { renderScale(); applyStageSize(); });
+  // The page may be hidden at load (clientWidth 0) — re-render the thumb
+  // whenever its page becomes visible.
+  pagesDots.forEach(d => d.addEventListener('click', () => requestAnimationFrame(renderScale)));
+  renderScale();
 })();
 
 // Belt and braces for iOS: cancel selection and long-press context menu
