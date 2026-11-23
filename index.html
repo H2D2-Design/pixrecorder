@@ -1451,15 +1451,24 @@ const LINE_FOLLOW_FAST = 3;     // 1/s — how fast floor/ceiling chase new extr
                                 // (slow enough that a hit can overshoot the
                                 // ceiling and register as a full-height peak)
 const LINE_FOLLOW_SLOW = 0.35;  // 1/s — how fast they relax back (~3 s)
-const LINE_MIN_SPAN    = 0.2;   // minimum floor→ceiling span (0–1 scale)
+const LINE_MIN_SPAN    = 0.25;  // minimum floor→ceiling span (0–1 scale) — high
+                                // enough that small wobbles in quiet music stay small
 const LINE_CONTRAST    = 1.4;   // >1 = calmer lows, punchier peaks
-const LINE_OUT_GAIN    = 1.6;   // headroom stretch so strong hits reach the top
+const LINE_OUT_GAIN    = 2.0;   // headroom stretch so strong hits reach the top
 const LINE_GATE        = 0.06;  // ceiling below this → channel treated as silent
-// Output envelope — calms the result without adding latency: rises are
-// passed through instantly so hits land on the beat; only the fall is
-// smoothed so icons glide back instead of jittering frame to frame.
-const LINE_RELEASE     = 3.5;   // 1/s fall rate (~285 ms)
-const lineOut   = new Float32Array(6);
+// Output spring — each channel's drive value is a damped spring pulled
+// toward the expander's target. The spring's mass filters out frame-to-
+// frame jitter (icons glide instead of jumping), and light damping lets
+// them overshoot and swing back a little, so the motion breathes with the
+// music rather than twitching.
+//   LINE_SPRING_HZ   natural frequency — higher = snappier, lower = floatier
+//   LINE_SPRING_DAMP damping ratio — 1 = no overshoot, lower = more swing
+const LINE_SPRING_HZ   = 2.0;
+const LINE_SPRING_DAMP = 0.35;
+const LINE_SPRING_K    = Math.pow(2 * Math.PI * LINE_SPRING_HZ, 2);
+const LINE_SPRING_C    = 2 * LINE_SPRING_DAMP * 2 * Math.PI * LINE_SPRING_HZ;
+const lineOut   = new Float32Array(6);   // spring position
+const lineVel   = new Float32Array(6);   // spring velocity
 let lineMode = false;
 const lineFloor = new Float32Array(6);
 const lineCeil  = new Float32Array(6);
@@ -1506,6 +1515,7 @@ function resetLineDynamics() {
   lineFloor.fill(0.5);
   lineCeil.fill(0.5);
   lineOut.fill(0);
+  lineVel.fill(0);
   lineSubMean.fill(0.5);
   lineSubVar.fill(0);
 }
@@ -1518,9 +1528,19 @@ function expandDynamics(i, s, dt) {
   const n = Math.max(0, Math.min(1, (s - lineFloor[i]) / span * LINE_OUT_GAIN));
   const gate = Math.min(1, lineCeil[i] / LINE_GATE);
   const target = Math.pow(n, LINE_CONTRAST) * gate;
-  if (target >= lineOut[i]) lineOut[i] = target;                       // instant attack
-  else lineOut[i] += (target - lineOut[i]) * Math.min(1, dt * LINE_RELEASE);
-  return lineOut[i];
+  // Integrate the spring in ≤ 1/120 s sub-steps so it stays stable when a
+  // frame is slow (dt is capped at 0.1 s upstream).
+  const steps = Math.max(1, Math.ceil(dt * 120));
+  const h = dt / steps;
+  for (let k = 0; k < steps; k++) {
+    const acc = (target - lineOut[i]) * LINE_SPRING_K - lineVel[i] * LINE_SPRING_C;
+    lineVel[i] += acc * h;
+    lineOut[i] += lineVel[i] * h;
+  }
+  // Allow a little overshoot above 1 (that's the swing), never below 0 —
+  // a negative value would flip the icon's Y direction.
+  if (lineOut[i] < 0) { lineOut[i] = 0; if (lineVel[i] < 0) lineVel[i] = 0; }
+  return Math.min(1.15, lineOut[i]);
 }
 let sensitivity = 50;
 let scaleStrength = 50;
@@ -2833,7 +2853,7 @@ btn.addEventListener('click', async () => {
     // Internal routing: almost no analyser smoothing. The analyser smooths
     // rises and falls alike, which adds ~90 ms lag at 0.65; the line-mode
     // envelope already calms the falls, so rises can come through raw.
-    analyser.smoothingTimeConstant = lineMode ? 0.2 : 0.8;
+    analyser.smoothingTimeConstant = lineMode ? 0.5 : 0.8;
     btn.title = label ? 'Input: ' + label + (lineMode ? ' · line mode' : '') : '';
     setFreqrangeMicActive(true);
     animate();
